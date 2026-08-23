@@ -1,8 +1,12 @@
 import { io } from "socket.io-client";
 
-const socket = io(process.env.NEXT_PUBLIC_SOCKET_URL, {
+// Explicit fallback to Render URL prevents defaulting to Vercel domain
+const SOCKET_URL =
+  process.env.NEXT_PUBLIC_SOCKET_URL || "https://sih-socket-server.onrender.com";
+
+const socket = io(SOCKET_URL, {
   autoConnect: true,
-  transports: ["websocket", "polling"],
+  transports: ["polling", "websocket"], // MUST start with polling for Render proxy
   withCredentials: true,
 });
 
