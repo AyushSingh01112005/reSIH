@@ -1,51 +1,149 @@
-import SensorReading from "@/models/SensorReading";
-import connectDb from "@/lib/mongodb";
+const http = require("http");
+const { Server } = require("socket.io");
 
-export async function createSensorReading(data) {
-  await connectDb();
+const PORT = process.env.PORT || 4000;
 
-  const {
-    deviceId,
-    temperature,
-    humidity,
-    gas,
-    co2,
-    motion,
-  } = data;
+const FRONTEND_URL =
+  process.env.FRONTEND_URL || "https://sih-26-cyan.vercel.app";
 
-  const reading = await SensorReading.create({
-    deviceId,
-    temperature,
-    humidity,
-    gas,
-    co2,
-    motion,
+const normalizedFrontendUrl = FRONTEND_URL.replace(/\/$/, "");
+
+const allowedOrigins = [
+  normalizedFrontendUrl,
+  "https://sih-26-cyan.vercel.app",
+  "https://sih-26-beta.vercel.app",
+  "http://localhost:3000",
+];
+
+// =========================
+// HTTP SERVER
+// =========================
+const httpServer = http.createServer();
+
+// =========================
+// SOCKET.IO SERVER
+// =========================
+const io = new Server(httpServer, {
+  path: "/socket.io",
+
+  cors: {
+    origin: (origin, callback) => {
+      // Allow requests with no origin (mobile apps, curl, server-to-server)
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      callback(new Error("Not allowed by CORS"));
+    },
+    methods: ["GET", "POST"],
+    credentials: true,
+  },
+
+  transports: ["polling", "websocket"],
+  allowEIO3: false,
+
+  // Render free-tier stability: keep connection alive during inactivity
+  pingTimeout: 60000,
+  pingInterval: 25000,
+});
+
+// =========================
+// HTTP ROUTES
+// =========================
+httpServer.on("request", (req, res) => {
+  const origin = req.headers.origin;
+
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  }
+
+  // OPTIONS PREFLIGHT
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  // HEALTH CHECK
+  if (req.url === "/health" || req.url === "/") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        success: true,
+        service: "socket-server",
+        status: "ok",
+      })
+    );
+    return;
+  }
+
+  // INTERNAL SENSOR EVENT
+  if (req.method === "POST" && req.url === "/internal/sensor-saved") {
+    let body = "";
+
+    req.on("data", (chunk) => {
+      body += chunk;
+    });
+
+    req.on("end", () => {
+      try {
+        const data = JSON.parse(body);
+
+        console.log("📡 Sensor saved event received:", data);
+
+        // Broadcast event to all connected socket clients
+        io.emit("sensor:saved", data);
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            success: true,
+            message: "Sensor event emitted",
+          })
+        );
+      } catch (error) {
+        console.error("❌ Invalid sensor event payload:", error);
+
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            success: false,
+            message: "Invalid JSON data",
+          })
+        );
+      }
+    });
+
+    return;
+  }
+
+  // UNKNOWN ROUTE
+  res.writeHead(404, { "Content-Type": "text/plain" });
+  res.end("Not Found");
+});
+
+// =========================
+// SOCKET CONNECTION
+// =========================
+io.on("connection", (socket) => {
+  console.log("🟢 Client connected:", socket.id);
+
+  socket.on("disconnect", (reason) => {
+    console.log("🟡 Client disconnected:", socket.id, "-", reason);
   });
 
-  // Notify Socket.IO after successful database save
-  try {
-    const response = await fetch(
-      `${process.env.SOCKET_SERVER_URL}/internal/sensor-saved`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          id: reading._id.toString(),
-          deviceId: reading.deviceId,
-          temperature: reading.temperature,
-          humidity: reading.humidity,
-          gas: reading.gas,
-          co2: reading.co2,
-          motion: reading.motion,
-        }),
-      }
-    );
+  socket.on("error", (error) => {
+    console.error("🔴 Socket error:", socket.id, error);
+  });
+});
 
-    console.log("Socket server response:", response.status);
-  } catch (error) {
-    console.error("Socket notification failed:", error);
-  }
-  return reading;
-}
+// =========================
+// START SERVER
+// =========================
+httpServer.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 Socket.IO server running on port ${PORT}`);
+  console.log(`🌐 Allowed Origin: ${normalizedFrontendUrl}`);
+});

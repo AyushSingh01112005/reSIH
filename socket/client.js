@@ -1,11 +1,11 @@
 import { io } from "socket.io-client";
 
 const SOCKET_URL =
-  process.env.NEXT_PUBLIC_SOCKET_URL || "https://sih-socket-server.onrender.com";
+  process.env.NEXT_PUBLIC_SOCKET_URL || "https://socketiosih-1.onrender.com";
 
 const socket = io(SOCKET_URL, {
   autoConnect: true,
-  transports: ["websocket", "polling"], // ← Allow fallback!
+  transports: ["websocket", "polling"],
   withCredentials: true,
   reconnection: true,
   reconnectionAttempts: 5,
