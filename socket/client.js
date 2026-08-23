@@ -5,20 +5,23 @@ const SOCKET_URL =
 
 const socket = io(SOCKET_URL, {
   autoConnect: true,
-  transports: ["websocket"], // Force direct WebSocket connection
+  transports: ["websocket", "polling"], // ← Allow fallback!
   withCredentials: true,
+  reconnection: true,
+  reconnectionAttempts: 5,
+  reconnectionDelay: 1000,
 });
 
 socket.on("connect", () => {
-  console.log("🟢 Socket connected successfully! ID:", socket.id);
+  console.log("🟢 Socket connected! ID:", socket.id);
 });
 
 socket.on("connect_error", (error) => {
-  console.error("🔴 Socket connection failed:", error.message, error);
+  console.error("🔴 Connection error:", error.message);
 });
 
 socket.on("disconnect", (reason) => {
-  console.warn("🟡 Socket disconnected:", reason);
+  console.warn("🟡 Disconnected:", reason);
 });
 
 export default socket;
