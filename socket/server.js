@@ -28,7 +28,7 @@ const io = new Server(httpServer, {
 
   cors: {
     origin: (origin, callback) => {
-      // Allow requests with no origin (mobile apps, curl, etc.)
+      // Allow requests with no origin (mobile apps, curl, server-to-server)
       if (!origin) return callback(null, true);
       if (allowedOrigins.includes(origin)) {
         return callback(null, true);
@@ -42,7 +42,7 @@ const io = new Server(httpServer, {
   transports: ["polling", "websocket"],
   allowEIO3: false,
 
-  // Render free-tier fixes: prevent premature disconnects
+  // Render free-tier stability: keep connection alive during inactivity
   pingTimeout: 60000,
   pingInterval: 25000,
 });
@@ -51,7 +51,6 @@ const io = new Server(httpServer, {
 // HTTP ROUTES
 // =========================
 httpServer.on("request", (req, res) => {
-  // CORS
   const origin = req.headers.origin;
 
   if (allowedOrigins.includes(origin)) {
@@ -61,7 +60,7 @@ httpServer.on("request", (req, res) => {
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   }
 
-  // OPTIONS / PREFLIGHT
+  // OPTIONS PREFLIGHT
   if (req.method === "OPTIONS") {
     res.writeHead(204);
     res.end();
@@ -69,7 +68,7 @@ httpServer.on("request", (req, res) => {
   }
 
   // HEALTH CHECK
-  if (req.url === "/health") {
+  if (req.url === "/health" || req.url === "/") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(
       JSON.stringify({
@@ -93,8 +92,9 @@ httpServer.on("request", (req, res) => {
       try {
         const data = JSON.parse(body);
 
-        console.log("📡 Sensor saved event:", data);
+        console.log("📡 Sensor saved event received:", data);
 
+        // Broadcast event to all connected socket clients
         io.emit("sensor:saved", data);
 
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -105,7 +105,7 @@ httpServer.on("request", (req, res) => {
           })
         );
       } catch (error) {
-        console.error("❌ Invalid sensor event:", error);
+        console.error("❌ Invalid sensor event payload:", error);
 
         res.writeHead(400, { "Content-Type": "application/json" });
         res.end(
@@ -120,7 +120,7 @@ httpServer.on("request", (req, res) => {
     return;
   }
 
-  // UNKNOWN HTTP ROUTE
+  // UNKNOWN ROUTE
   res.writeHead(404, { "Content-Type": "text/plain" });
   res.end("Not Found");
 });
@@ -145,5 +145,5 @@ io.on("connection", (socket) => {
 // =========================
 httpServer.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Socket.IO server running on port ${PORT}`);
-  console.log(`🌐 Frontend URL: ${normalizedFrontendUrl}`);
+  console.log(`🌐 Allowed Origin: ${normalizedFrontendUrl}`);
 });
