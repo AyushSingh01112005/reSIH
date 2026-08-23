@@ -1,7 +1,7 @@
 const http = require("http");
 const { Server } = require("socket.io");
 
-const PORT = process.env.SOCKET_PORT || 4000;
+const PORT = process.env.PORT || process.env.SOCKET_PORT || 4000;
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 
 const httpServer = http.createServer();
