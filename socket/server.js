@@ -23,10 +23,15 @@ const io = new Server(httpServer, {
 });
 
 io.on("connection", (socket) => {
-  console.log("Client connected:", socket.id);
+  console.log("🟢 Client connected successfully:", socket.id);
+
+  // Catch socket-level errors
+  socket.on("error", (err) => {
+    console.error("🔴 Socket error on client", socket.id, ":", err);
+  });
 
   socket.on("disconnect", (reason) => {
-    console.log("Client disconnected:", socket.id, "-", reason);
+    console.warn("🟡 Client disconnected:", socket.id, "-", reason);
   });
 });
 
@@ -42,11 +47,11 @@ httpServer.on("request", (req, res) => {
     req.on("end", () => {
       try {
         const data = JSON.parse(body);
-        console.log("Sensor saved event received:", data);
+        console.log("📥 Sensor saved event received:", data);
 
         // Broadcast event to all connected frontends
         io.emit("sensor:saved", data);
-        console.log("sensor:saved emitted");
+        console.log("📢 sensor:saved event emitted to all clients");
 
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(
@@ -56,7 +61,7 @@ httpServer.on("request", (req, res) => {
           })
         );
       } catch (error) {
-        console.error("Invalid sensor event:", error);
+        console.error("❌ Invalid sensor event payload:", error);
 
         res.writeHead(400, { "Content-Type": "application/json" });
         res.end(
@@ -82,5 +87,5 @@ httpServer.on("request", (req, res) => {
 
 // Explicit host binding to 0.0.0.0 for cloud platform container routing
 httpServer.listen(PORT, "0.0.0.0", () => {
-  console.log(`Socket.IO server running on port ${PORT}`);
+  console.log(`🚀 Socket.IO server running on port ${PORT}`);
 });

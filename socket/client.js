@@ -10,4 +10,17 @@ const socket = io(SOCKET_URL, {
   withCredentials: true,
 });
 
+// Event Listeners for Debugging Connection Status in Browser Console
+socket.on("connect", () => {
+  console.log("🟢 Socket connected successfully! ID:", socket.id);
+});
+
+socket.on("connect_error", (error) => {
+  console.error("🔴 Socket connection failed:", error.message, error);
+});
+
+socket.on("disconnect", (reason) => {
+  console.warn("🟡 Socket disconnected:", reason);
+});
+
 export default socket;
