@@ -6,11 +6,11 @@ import { useEffect } from "react";
 export default function SensorHistory({ onData }) {
   useEffect(() => {
     console.log("SensorHistory mounted");
-    console.log("Calling: /api/getSensor?limit=20");
+    console.log("Calling: /api/getSensor?limit=50");
 
     const getReadings = async () => {
       try {
-        const res = await axios.get("/api/getSensor?limit=20");
+        const res = await axios.get("/api/getSensor?limit=50");
 
         console.log("Sensor API response:", res);
         console.log("Sensor data:", res.data);

@@ -10,7 +10,7 @@ export async function GET(request) {
     console.log("1. Request URL:", request.url);
 
     const { searchParams } = new URL(request.url);
-    const limit = Number(searchParams.get("limit")) || 20;
+    const limit = Number(searchParams.get("limit")) || 50;
 
     console.log("2. Limit:", limit);
 
