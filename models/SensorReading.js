@@ -27,6 +27,10 @@ const SensorReadingSchema = new mongoose.Schema(
     motion: {
       type: Boolean,
     },
+    
+    alcohol_trigger: {
+      type: Boolean,
+    },
 
     timestamp: {
       type: Date,
@@ -44,3 +48,5 @@ const SensorReading =
   mongoose.model("SensorReading", SensorReadingSchema);
 
 export default SensorReading;
+
+ 
