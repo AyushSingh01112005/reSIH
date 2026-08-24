@@ -21,13 +21,12 @@ const SensorReadingSchema = new mongoose.Schema(
 
     co2: {
       type: Number,
-      required: true,
     },
 
     motion: {
       type: Boolean,
     },
-    
+
     alcohol_trigger: {
       type: Boolean,
     },
