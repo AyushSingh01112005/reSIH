@@ -1,13 +1,15 @@
 import mongoose from "mongoose";
 
-const sensorSchema = new mongoose.Schema(
+const SensorReadingSchema = new mongoose.Schema(
   {
     deviceId: {
       type: String,
+      index: true,
     },
 
     timestamp_ms: {
       type: Number,
+      index: true,
     },
 
     telemetry: {
@@ -65,6 +67,8 @@ const sensorSchema = new mongoose.Schema(
   }
 );
 
-const Sensor = mongoose.model("Sensor", sensorSchema);
+const SensorReading =
+  mongoose.models.SensorReading ||
+  mongoose.model("SensorReading", SensorReadingSchema);
 
-export default Sensor;
+export default SensorReading;
