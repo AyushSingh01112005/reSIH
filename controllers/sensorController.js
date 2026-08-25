@@ -4,61 +4,80 @@ import connectDb from "@/lib/mongodb";
 export async function createSensorReading(data) {
   await connectDb();
 
-  const { deviceId, temperature, humidity, gas, co2, motion } = data;
+  const {
+    deviceId,
+    timestamp_ms,
+    telemetry,
+    triggers,
+    status,
+  } = data;
 
   const reading = await SensorReading.create({
     deviceId,
-    temperature,
-    humidity,
-    gas,
-    co2,
-    motion,
+    timestamp_ms,
+    telemetry,
+    triggers,
+    status,
   });
 
-  // 1. Resolve URL with fallback and clean trailing slashes
+  // Resolve Socket.IO server URL
   const baseUrl = (
-    process.env.SOCKET_SERVER_URL || "https://socketiosih-1.onrender.com"
+    process.env.SOCKET_SERVER_URL ||
+    "https://socketiosih-1.onrender.com"
   ).replace(/\/$/, "");
 
-  // 2. Add timeout so cold starts don't hang your database write response
+  // Add timeout so cold starts don't hang the response
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 3000); // 3s timeout
+
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, 3000);
 
   // Notify Socket.IO server after successful DB save
   try {
-    const response = await fetch(`${baseUrl}/internal/sensor-saved`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
-        id: reading._id.toString(),
-        deviceId: reading.deviceId,
-        temperature: reading.temperature,
-        humidity: reading.humidity,
-        gas: reading.gas,
-        co2: reading.co2,
-        motion: reading.motion,
-      }),
-    });
+    const response = await fetch(
+      `${baseUrl}/internal/sensor-saved`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          id: reading._id.toString(),
+          deviceId: reading.deviceId,
+          timestamp_ms: reading.timestamp_ms,
+          telemetry: reading.telemetry,
+          triggers: reading.triggers,
+          status: reading.status,
+        }),
+      }
+    );
 
     clearTimeout(timeoutId);
 
-    // 3. Catch HTTP status errors (404, 500, etc.)
     if (!response.ok) {
       console.error(
         `Socket server responded with error HTTP status: ${response.status}`
       );
     } else {
-      console.log("🟢 Socket notification sent successfully:", response.status);
+      console.log(
+        "🟢 Socket notification sent successfully:",
+        response.status
+      );
     }
   } catch (error) {
     clearTimeout(timeoutId);
+
     if (error.name === "AbortError") {
-      console.error("🔴 Socket notification timed out (server might be waking up)");
+      console.error(
+        "🔴 Socket notification timed out (server might be waking up)"
+      );
     } else {
-      console.error("🔴 Socket notification failed:", error.message);
+      console.error(
+        "🔴 Socket notification failed:",
+        error.message
+      );
     }
   }
 
