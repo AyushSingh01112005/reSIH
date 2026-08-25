@@ -1,40 +1,63 @@
 import mongoose from "mongoose";
 
-const SensorReadingSchema = new mongoose.Schema(
+const sensorSchema = new mongoose.Schema(
   {
     deviceId: {
       type: String,
-      index: true,
     },
 
-    temperature: {
+    timestamp_ms: {
       type: Number,
     },
 
-    humidity: {
-      type: Number,
+    telemetry: {
+      temperature: {
+        type: Number,
+      },
+
+      humidity: {
+        type: Number,
+      },
+
+      gas_raw: {
+        type: Number,
+      },
+
+      co2_sim: {
+        type: Number,
+      },
     },
 
-    gas: {
-      type: Number,
+    triggers: {
+      alcohol_detected: {
+        type: Boolean,
+      },
+
+      motion_detected: {
+        type: Boolean,
+      },
+
+      sound_detected: {
+        type: Boolean,
+      },
+
+      tamper_light: {
+        type: Boolean,
+      },
     },
 
-    co2: {
-      type: Number,
-    },
+    status: {
+      wifi_connected: {
+        type: Boolean,
+      },
 
-    motion: {
-      type: Boolean,
-    },
+      http_response: {
+        type: Number,
+      },
 
-    alcohol_trigger: {
-      type: Boolean,
-    },
-
-    timestamp: {
-      type: Date,
-      default: Date.now,
-      index: true,
+      uptime_sec: {
+        type: Number,
+      },
     },
   },
   {
@@ -42,10 +65,6 @@ const SensorReadingSchema = new mongoose.Schema(
   }
 );
 
-const SensorReading =
-  mongoose.models.SensorReading ||
-  mongoose.model("SensorReading", SensorReadingSchema);
+const Sensor = mongoose.model("Sensor", sensorSchema);
 
-export default SensorReading;
-
- 
+export default Sensor;
