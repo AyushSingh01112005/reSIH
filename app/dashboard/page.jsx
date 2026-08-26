@@ -18,7 +18,6 @@ import {
 } from "recharts";
 
 import SensorHistory from "@/components/SensorHistory";
-import SensorSocket from "@/components/SensorSocket";
 
 const Page = () => {
   const [sensorData, setSensorData] = useState({
@@ -528,12 +527,7 @@ const Page = () => {
   return (
     <div className="min-h-screen bg-[#020617] text-white">
 
-      {/* SOCKET */}
 
-      <SensorSocket
-        onSensorUpdate={handleSensorUpdate}
-        onConnectionChange={handleConnectionChange}
-      />
 
       {/* HISTORICAL DATA */}
 

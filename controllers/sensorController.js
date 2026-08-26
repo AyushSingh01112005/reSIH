@@ -2,84 +2,55 @@ import SensorReading from "@/models/SensorReading";
 import connectDb from "@/lib/mongodb";
 
 export async function createSensorReading(data) {
-  await connectDb();
-
-  const {
-    deviceId,
-    timestamp_ms,
-    telemetry,
-    triggers,
-    status,
-  } = data;
-
-  const reading = await SensorReading.create({
-    deviceId,
-    timestamp_ms,
-    telemetry,
-    triggers,
-    status,
-  });
-
-  // Resolve Socket.IO server URL
-  const baseUrl = (
-    process.env.SOCKET_SERVER_URL ||
-    "https://socketiosih-1.onrender.com"
-  ).replace(/\/$/, "");
-
-  // Add timeout so cold starts don't hang the response
-  const controller = new AbortController();
-
-  const timeoutId = setTimeout(() => {
-    controller.abort();
-  }, 3000);
-
-  // Notify Socket.IO server after successful DB save
   try {
-    const response = await fetch(
-      `${baseUrl}/internal/sensor-saved`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        signal: controller.signal,
-        body: JSON.stringify({
-          id: reading._id.toString(),
-          deviceId: reading.deviceId,
-          timestamp_ms: reading.timestamp_ms,
-          telemetry: reading.telemetry,
-          triggers: reading.triggers,
-          status: reading.status,
-        }),
-      }
+    // Connect to MongoDB
+    await connectDb();
+
+    // Validate input
+    if (!data || typeof data !== "object") {
+      throw new Error("Invalid sensor data");
+    }
+
+    const {
+      deviceId,
+      timestamp_ms,
+      telemetry,
+      triggers,
+      status,
+    } = data;
+
+    if (!deviceId) {
+      throw new Error("deviceId is required");
+    }
+
+    if (timestamp_ms === undefined || timestamp_ms === null) {
+      throw new Error("timestamp_ms is required");
+    }
+
+    if (!telemetry || typeof telemetry !== "object") {
+      throw new Error("telemetry data is required");
+    }
+
+    // Save sensor reading
+    const reading = await SensorReading.create({
+      deviceId,
+      timestamp_ms,
+      telemetry,
+      triggers: triggers || {},
+      status: status || {},
+    });
+
+    console.log(
+      `🟢 Sensor reading saved | Device: ${deviceId} | ID: ${reading._id}`
     );
 
-    clearTimeout(timeoutId);
-
-    if (!response.ok) {
-      console.error(
-        `Socket server responded with error HTTP status: ${response.status}`
-      );
-    } else {
-      console.log(
-        "🟢 Socket notification sent successfully:",
-        response.status
-      );
-    }
+    return reading;
   } catch (error) {
-    clearTimeout(timeoutId);
+    console.error(
+      "🔴 Failed to create sensor reading:",
+      error
+    );
 
-    if (error.name === "AbortError") {
-      console.error(
-        "🔴 Socket notification timed out (server might be waking up)"
-      );
-    } else {
-      console.error(
-        "🔴 Socket notification failed:",
-        error.message
-      );
-    }
+    throw error;
   }
-
-  return reading;
 }
