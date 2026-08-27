@@ -99,6 +99,7 @@ const Page = () => {
   const [isDeviceOnline, setIsDeviceOnline] = useState(false);
   const [prediction, setPrediction] = useState(null);
   const [activeAlert, setActiveAlert] = useState(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   const lastRiskRef = useRef(0);
   const lastStatusRef = useRef("NORMAL");
@@ -919,6 +920,83 @@ const Page = () => {
         {/* ================================================= */}
         <section className="mb-8">
           <PredictionSummary prediction={prediction} />
+          
+          <div className="mt-4 flex flex-col justify-between gap-4 rounded-2xl border border-slate-800 bg-gradient-to-r from-blue-950/20 to-indigo-950/20 p-5 backdrop-blur-md md:flex-row md:items-center">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-blue-400">Google Gemini LLM</span>
+                <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-400">Free Tier Active</span>
+              </div>
+              <h4 className="mt-1 text-sm font-semibold text-white">Biochemical Cold Storage Analysis</h4>
+              <p className="mt-1 text-xs text-slate-400">
+                Run an advanced AI analysis of the current environmental telemetry. Results are printed to your browser's developer console.
+              </p>
+            </div>
+            <button
+              onClick={async () => {
+                if (isAnalyzing) return;
+                setIsAnalyzing(true);
+                console.log("====================================================");
+                console.log("🤖 Starting Google Gemini LLM Analysis...");
+                console.log("Analyzing product: Mango");
+                console.log("Telemetry Payload:", {
+                  telemetry: sensorData.telemetry,
+                  triggers: sensorData.triggers,
+                  status: sensorData.status,
+                  deviceId: sensorData.deviceId,
+                  timestamp_ms: sensorData.timestamp_ms
+                });
+                
+                try {
+                  const res = await fetch("/api/gemini", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      product: "mango",
+                      telemetry: sensorData.telemetry,
+                      triggers: sensorData.triggers,
+                      status: sensorData.status,
+                      deviceId: sensorData.deviceId,
+                      timestamp_ms: sensorData.timestamp_ms
+                    })
+                  });
+                  
+                  const data = await res.json();
+                  if (data.success) {
+                    console.group("🥭 Google Gemini Biochemical Spoilage Risk Assessment");
+                    console.log("Overall Spoilage Risk Percentage:", data.analysis.riskPercentage + "%");
+                    console.log("Remaining Shelf Life Prediction:", data.analysis.remainingShelfLifeDays + " Days");
+                    console.log("Biochemical Analysis & Mitigation Recommendation:", data.analysis.explanation);
+                    console.groupEnd();
+                    alert("Gemini analysis complete! Please open your browser's Developer Console (F12) to view the detailed biochemical assessment.");
+                  } else {
+                    console.error("Gemini API Error:", data.error);
+                    alert("Gemini Analysis failed: " + data.error);
+                  }
+                } catch (error) {
+                  console.error("Gemini Analysis Request Failed:", error);
+                  alert("Failed to connect to the Gemini API endpoint. Ensure GEMINI_API_KEY is configured in your .env.local file.");
+                } finally {
+                  setIsAnalyzing(false);
+                }
+              }}
+              disabled={isAnalyzing}
+              className={`flex h-10 items-center justify-center rounded-xl px-5 text-xs font-bold transition-all duration-300 ${
+                isAnalyzing
+                  ? "bg-slate-800 text-slate-500 cursor-not-allowed"
+                  : "bg-blue-600 text-white hover:bg-blue-500 active:scale-95 shadow-md shadow-blue-500/10"
+              }`}
+            >
+              {isAnalyzing ? (
+                <span className="flex items-center gap-2">
+                  <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-500 border-t-white" />
+                  Analyzing...
+                </span>
+              ) : (
+                "Analyze with Gemini"
+              )}
+            </button>
+          </div>
         </section>
 
 
