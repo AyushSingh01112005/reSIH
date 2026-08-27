@@ -51,6 +51,26 @@ const Page = () => {
   const [sensorHistory, setSensorHistory] = useState([]);
   const [lastUpdate, setLastUpdate] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
+  const [prediction, setPrediction] = useState(null);
+
+  const updatePrediction = useCallback(async (reading) => {
+    try {
+      const response = await fetch("/api/silosense/predict", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(reading),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Prediction request failed: ${response.status}`);
+      }
+
+      const result = await response.json();
+      setPrediction(result.prediction || null);
+    } catch (error) {
+      console.error("Prediction update failed:", error);
+    }
+  }, []);
 
   // =====================================================
   // NORMALIZE SENSOR DATA
@@ -145,8 +165,10 @@ const Page = () => {
           newReading.createdAt || new Date().toISOString()
         )
       );
+
+      void updatePrediction(newReading);
     },
-    [normalizeReading]
+    [normalizeReading, updatePrediction]
   );
 
   // =====================================================
@@ -174,9 +196,11 @@ const Page = () => {
             latest.createdAt || new Date().toISOString()
           )
         );
+
+        void updatePrediction(latest);
       }
     },
-    [normalizeReading]
+    [normalizeReading, updatePrediction]
   );
 
   // =====================================================
@@ -787,26 +811,22 @@ const Page = () => {
 
               <p
                 className={`text-2xl font-bold ${
-                  motionDetected ||
-                  soundDetected ||
-                  alcoholDetected ||
-                  tamperDetected
+                  prediction?.status === "CRITICAL"
+                    ? "text-red-400"
+                    : prediction?.status === "WARNING" ||
+                        motionDetected ||
+                        soundDetected ||
+                        alcoholDetected ||
+                        tamperDetected
                     ? "text-yellow-400"
                     : "text-emerald-400"
                 }`}
               >
-                {
-                  [
-                    motionDetected,
-                    soundDetected,
-                    alcoholDetected,
-                    tamperDetected,
-                  ].filter(Boolean).length
-                }
+                {prediction ? `${prediction.riskPercentage}%` : "--"}
               </p>
 
               <p className="mt-1 text-xs text-slate-500">
-                Current sensor triggers
+                {prediction?.alerts?.[0] || "No active alerts"}
               </p>
 
             </div>
@@ -1873,7 +1893,11 @@ const Page = () => {
 
               <StorageItem
                 title="Shelf Life"
-                value="24 Days"
+                value={
+                  prediction?.remainingShelfLifeDays != null
+                    ? `${prediction.remainingShelfLifeDays} Days`
+                    : "--"
+                }
               />
 
             </div>

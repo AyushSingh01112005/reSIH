@@ -37,7 +37,7 @@ export async function POST(
     /**
      * 1. Receive SiloSense payload.
      */
-    const payload = await request.json();
+    const payload = await request.json() as Partial<SiloSensePayload>;
 
 
     /**
@@ -46,7 +46,12 @@ export async function POST(
     if (
       !payload.telemetry ||
       !payload.triggers ||
-      !payload.deviceId
+      !payload.deviceId ||
+      !Number.isFinite(payload.timestamp_ms) ||
+      !Number.isFinite(payload.telemetry.temperature) ||
+      !Number.isFinite(payload.telemetry.humidity) ||
+      !Number.isFinite(payload.telemetry.gas_raw) ||
+      !Number.isFinite(payload.telemetry.co2_sim)
     ) {
 
       return NextResponse.json(
@@ -97,7 +102,7 @@ export async function POST(
      */
     const prediction =
       predictSiloSense(
-        payload,
+        payload as SiloSensePayload,
         previousState,
         product
       );
@@ -133,6 +138,8 @@ export async function POST(
 
       prediction:
         prediction.result,
+
+      receivedAt: new Date().toISOString(),
     });
 
 

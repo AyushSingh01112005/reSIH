@@ -35,6 +35,9 @@ export type ProductProfile = {
   // Maximum acceptable accumulated damage.
   criticalDamage: number;
 
+  // Shelf life in hours at the reference conditions.
+  baselineShelfLifeHours: number;
+
   // How strongly humidity affects deterioration.
   humiditySensitivity: number;
 
@@ -74,7 +77,8 @@ export const MANGO: ProductProfile = {
   co2Safe: 1000,
   co2Critical: 3000,
 
-  criticalDamage: 12,
+  criticalDamage: 168,
+  baselineShelfLifeHours: 168,
 
   humiditySensitivity: 0.25,
   gasSensitivity: 0.20,

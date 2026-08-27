@@ -88,6 +88,8 @@ export type PredictionResult = {
 
   physicalAlert: boolean;
 
+  alerts: string[];
+
   status:
     | "SAFE"
     | "WARNING"
@@ -368,15 +370,15 @@ function updateDamage(
   profile: ProductProfile
 ): number {
 
+  // timestamp_ms is ESP uptime. A reboot or counter rollover must not
+  // create a large artificial exposure interval.
   const deltaHours =
-    Math.max(
-      0,
-      (
-        currentTimestamp -
-        state.lastTimestamp
-      ) /
-      (1000 * 60 * 60)
-    );
+    currentTimestamp >= state.lastTimestamp
+      ? Math.min(
+          (currentTimestamp - state.lastTimestamp) / (1000 * 60 * 60),
+          24
+        )
+      : 0;
 
   const damageIncrease =
     deteriorationRate *
@@ -446,7 +448,7 @@ function calculateRemainingShelfLife(
   const remainingDamage =
     Math.max(
       0,
-      profile.criticalDamage -
+      profile.baselineShelfLifeHours -
       damage
     );
 
@@ -456,9 +458,9 @@ function calculateRemainingShelfLife(
     return Infinity;
   }
 
-  return (
-    remainingDamage /
-    deteriorationRate
+  return Math.max(
+    0,
+    remainingDamage / deteriorationRate
   );
 }
 
@@ -594,6 +596,40 @@ export function predictSiloSense(
     triggers.tamper_light ||
     triggers.sound_detected;
 
+  const alerts: string[] = [];
+
+  if (temperatureRisk >= 0.65) {
+    alerts.push("Temperature is in the critical range");
+  } else if (temperatureRisk >= 0.3) {
+    alerts.push("Temperature is above the mango storage target");
+  }
+
+  if (humidityStress >= 0.65) {
+    alerts.push("Humidity is critically high");
+  } else if (humidityStress >= 0.3) {
+    alerts.push("Humidity is above the mango storage target");
+  }
+
+  if (gasStress >= 0.65) {
+    alerts.push("Gas index indicates advanced spoilage activity");
+  } else if (gasStress >= 0.3) {
+    alerts.push("Gas index is elevated");
+  }
+
+  if (co2Stress >= 0.65) {
+    alerts.push("CO2 index is critically high");
+  } else if (co2Stress >= 0.3) {
+    alerts.push("CO2 index is elevated");
+  }
+
+  if (triggers.alcohol_detected) {
+    alerts.push("Alcohol detected: inspect fruit for fermentation");
+  }
+
+  if (triggers.motion_detected || triggers.sound_detected || triggers.tamper_light) {
+    alerts.push("Physical or tamper activity detected");
+  }
+
 
   /**
    * 9. COMPOSITE RISK
@@ -613,6 +649,10 @@ export function predictSiloSense(
 
     damageRisk *
       profile.damageRiskWeight;
+
+  if (triggers.alcohol_detected) {
+    risk = Math.max(risk, 0.45);
+  }
 
 
   /**
@@ -784,6 +824,8 @@ export function predictSiloSense(
         ),
 
       physicalAlert,
+
+      alerts,
 
       status,
 

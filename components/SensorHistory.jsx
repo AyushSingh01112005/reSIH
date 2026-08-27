@@ -26,6 +26,10 @@ export default function SensorHistory({ onData }) {
     };
 
     getReadings();
+
+    const intervalId = window.setInterval(getReadings, 5000);
+
+    return () => window.clearInterval(intervalId);
   }, [onData]);
 
   return null;
