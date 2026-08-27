@@ -27,7 +27,7 @@ export async function GET(request) {
 
     console.log("6. Query successful");
     console.log("7. Records found:", data.length);
-    console.log("8. Data:", data);
+    // console.log("8. Data:", data);
 
     console.log("9. Sending response...");
 

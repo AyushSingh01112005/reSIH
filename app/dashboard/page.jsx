@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, useEffect, useRef } from "react";
 
 import {
   LineChart,
@@ -17,7 +17,52 @@ import {
   ReferenceLine,
 } from "recharts";
 
-import SensorHistory from "@/components/SensorHistory";
+import PredictionSummary from "@/components/PredictionSummary";
+import DashboardAlerts from "@/components/DashboardAlerts";
+
+// =====================================================
+// UTILS: ALARMS & NOTIFICATIONS
+// =====================================================
+
+const playBuzzerSound = () => {
+  if (typeof window === "undefined") return;
+  try {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+
+    oscillator.type = "sawtooth";
+    oscillator.frequency.setValueAtTime(180, audioCtx.currentTime);
+
+    const now = audioCtx.currentTime;
+    oscillator.frequency.setValueAtTime(180, now);
+    oscillator.frequency.linearRampToValueAtTime(250, now + 0.15);
+    oscillator.frequency.linearRampToValueAtTime(180, now + 0.3);
+    oscillator.frequency.linearRampToValueAtTime(250, now + 0.45);
+    oscillator.frequency.linearRampToValueAtTime(180, now + 0.6);
+
+    gainNode.gain.setValueAtTime(0, now);
+    gainNode.gain.linearRampToValueAtTime(0.3, now + 0.05);
+    gainNode.gain.setValueAtTime(0.3, now + 0.55);
+    gainNode.gain.linearRampToValueAtTime(0, now + 0.6);
+
+    oscillator.start(now);
+    oscillator.stop(now + 0.6);
+  } catch (err) {
+    console.warn("AudioContext playback blocked/failed:", err);
+  }
+};
+
+const sendDesktopNotification = (title, body) => {
+  if (typeof window === "undefined" || !("Notification" in window)) return;
+
+  if (Notification.permission === "granted") {
+    new Notification(title, { body });
+  }
+};
 
 const Page = () => {
   const [sensorData, setSensorData] = useState({
@@ -51,26 +96,29 @@ const Page = () => {
   const [sensorHistory, setSensorHistory] = useState([]);
   const [lastUpdate, setLastUpdate] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
+  const [isDeviceOnline, setIsDeviceOnline] = useState(false);
   const [prediction, setPrediction] = useState(null);
+  const [activeAlert, setActiveAlert] = useState(null);
 
-  const updatePrediction = useCallback(async (reading) => {
-    try {
-      const response = await fetch("/api/silosense/predict", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(reading),
-      });
+  const lastRiskRef = useRef(0);
+  const lastStatusRef = useRef("NORMAL");
+  const lastAlertTimeRef = useRef(0);
 
-      if (!response.ok) {
-        throw new Error(`Prediction request failed: ${response.status}`);
+  // Monitor NodeMCU device activity timeout (7 seconds)
+  useEffect(() => {
+    const checkTimeout = () => {
+      if (lastUpdate) {
+        const diffMs = Date.now() - lastUpdate.getTime();
+        setIsDeviceOnline(diffMs <= 37000);
+      } else {
+        setIsDeviceOnline(false);
       }
+    };
 
-      const result = await response.json();
-      setPrediction(result.prediction || null);
-    } catch (error) {
-      console.error("Prediction update failed:", error);
-    }
-  }, []);
+    checkTimeout();
+    const interval = setInterval(checkTimeout, 1000);
+    return () => clearInterval(interval);
+  }, [lastUpdate]);
 
   // =====================================================
   // NORMALIZE SENSOR DATA
@@ -140,76 +188,112 @@ const Page = () => {
     };
   }, []);
 
-  // =====================================================
-  // SOCKET.IO SENSOR UPDATE
-  // =====================================================
+  // Request browser notification permission on mount
+  useEffect(() => {
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+  }, []);
 
-  const handleSensorUpdate = useCallback(
-    (data) => {
-      console.log("Dashboard received:", data);
+  // Trigger alert / buzzer logic
+  const handleRiskAlert = useCallback((pred) => {
+    if (!pred) return;
 
-      const newReading = normalizeReading(data);
+    const isHighRisk = pred.riskPercentage >= 40 || pred.status === "WARNING" || pred.status === "CRITICAL";
 
-      console.log("Normalized reading:", newReading);
+    if (isHighRisk) {
+      const now = Date.now();
+      const statusWorsened =
+        (pred.status === "CRITICAL" && lastStatusRef.current !== "CRITICAL") ||
+        (pred.status === "WARNING" && lastStatusRef.current === "NORMAL");
 
-      // Update current reading
-      setSensorData(newReading);
+      const timeElapsed = now - lastAlertTimeRef.current > 15000;
 
-      // Add ONLY ONCE to history
-      setSensorHistory((prev) => {
-        return [newReading, ...prev].slice(0, 50);
-      });
+      if (statusWorsened || timeElapsed) {
+        // Play buzzer sound
+        // playBuzzerSound();
 
-      setLastUpdate(
-        new Date(
-          newReading.createdAt || new Date().toISOString()
-        )
-      );
-
-      void updatePrediction(newReading);
-    },
-    [normalizeReading, updatePrediction]
-  );
-
-  // =====================================================
-  // HISTORICAL DATA
-  // =====================================================
-
-  const handleHistoricalData = useCallback(
-    (data) => {
-      if (!Array.isArray(data)) {
-        console.warn("Historical sensor data is not an array:", data);
-        return;
-      }
-
-      const normalized = data.map(normalizeReading);
-
-      setSensorHistory(normalized.slice(0, 50));
-
-      if (normalized.length > 0) {
-        const latest = normalized[0];
-
-        setSensorData(latest);
-
-        setLastUpdate(
-          new Date(
-            latest.createdAt || new Date().toISOString()
-          )
+        // Desktop notification
+        sendDesktopNotification(
+          `⚠️ SiloSense Alert: ${pred.status} Status`,
+          pred.explanation || `Silo spoilage risk has reached ${pred.riskPercentage}%.`
         );
 
-        void updatePrediction(latest);
+        // UI Toast Alert
+        setActiveAlert({
+          title: `Silo Alert: ${pred.status}`,
+          message: pred.explanation || `Spoilage risk has reached ${pred.riskPercentage}%. Please check storage conditions immediately.`,
+          status: pred.status,
+          time: new Date().toLocaleTimeString()
+        });
+
+        lastAlertTimeRef.current = now;
       }
-    },
-    [normalizeReading, updatePrediction]
-  );
+    } else {
+      setActiveAlert(null);
+    }
 
-  // =====================================================
-  // CONNECTION
-  // =====================================================
-
-  const handleConnectionChange = useCallback((connected) => {
-    setIsConnected(connected);
+    lastStatusRef.current = pred.status || "NORMAL";
+    lastRiskRef.current = pred.riskPercentage || 0;
   }, []);
+
+  // =====================================================
+  // REAL-TIME DATA POLLING (Every 2.5 seconds)
+  // =====================================================
+  useEffect(() => {
+    let active = true;
+
+    const fetchLatestData = async () => {
+      try {
+        const res = await fetch("/api/getSensor?limit=50");
+        if (!res.ok) throw new Error("Failed to fetch sensor data");
+        const json = await res.json();
+
+        if (!active) return;
+
+        if (json.success && Array.isArray(json.data)) {
+          setIsConnected(true);
+          const normalized = json.data.map(normalizeReading);
+          setSensorHistory(normalized.slice(0, 50));
+
+          if (normalized.length > 0) {
+            const latest = normalized[0];
+            setSensorData(latest);
+            setLastUpdate(new Date(latest.createdAt || new Date().toISOString()));
+
+            // Fetch prediction for the latest reading
+            const predResponse = await fetch("/api/silosense/predict", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(latest),
+            });
+
+            if (predResponse.ok) {
+              const predJson = await predResponse.json();
+              if (active && predJson.success) {
+                const predData = predJson.prediction || null;
+                setPrediction(predData);
+                handleRiskAlert(predData);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Error in polling fetch:", error);
+        if (active) {
+          setIsConnected(false);
+        }
+      }
+    };
+
+    fetchLatestData();
+    const intervalId = setInterval(fetchLatestData, 2500);
+
+    return () => {
+      active = false;
+      clearInterval(intervalId);
+    };
+  }, [normalizeReading, handleRiskAlert]);
 
   // =====================================================
   // CURRENT VALUES
@@ -551,14 +635,6 @@ const Page = () => {
   return (
     <div className="min-h-screen bg-[#020617] text-white">
 
-
-
-      {/* HISTORICAL DATA */}
-
-      <SensorHistory
-        onData={handleHistoricalData}
-      />
-
       {/* ================================================= */}
       {/* HEADER */}
       {/* ================================================= */}
@@ -602,29 +678,26 @@ const Page = () => {
             </div>
 
             <div
-              className={`flex items-center gap-2 rounded-full border px-4 py-2 ${
-                isConnected
-                  ? "border-emerald-500/20 bg-emerald-500/10"
-                  : "border-red-500/20 bg-red-500/10"
-              }`}
+              className={`flex items-center gap-2 rounded-full border px-4 py-2 ${isDeviceOnline
+                ? "border-emerald-500/20 bg-emerald-500/10"
+                : "border-red-500/20 bg-red-500/10"
+                }`}
             >
 
               <span
-                className={`h-2 w-2 rounded-full ${
-                  isConnected
-                    ? "bg-emerald-400 animate-pulse"
-                    : "bg-red-400"
-                }`}
+                className={`h-2 w-2 rounded-full ${isDeviceOnline
+                  ? "bg-emerald-400 animate-pulse"
+                  : "bg-red-400"
+                  }`}
               />
 
               <span
-                className={`text-xs font-medium ${
-                  isConnected
-                    ? "text-emerald-400"
-                    : "text-red-400"
-                }`}
+                className={`text-xs font-medium ${isDeviceOnline
+                  ? "text-emerald-400"
+                  : "text-red-400"
+                  }`}
               >
-                {isConnected ? "Live" : "Offline"}
+                {isDeviceOnline ? "Connected" : "Disconnected"}
               </span>
 
             </div>
@@ -640,6 +713,17 @@ const Page = () => {
       {/* ================================================= */}
 
       <main className="mx-auto max-w-7xl px-6 py-8">
+
+        {/* ALERTS SYSTEM */}
+        <div className="mb-6">
+          <DashboardAlerts
+            isDeviceOnline={isDeviceOnline}
+            lastUpdate={lastUpdate}
+            prediction={prediction}
+            activeAlert={activeAlert}
+            onDismissAlert={() => setActiveAlert(null)}
+          />
+        </div>
 
         {/* TITLE */}
 
@@ -706,15 +790,12 @@ const Page = () => {
             <div className="mt-5">
 
               <p
-                className={`text-2xl font-bold ${
-                  wifiConnected && isConnected
-                    ? "text-emerald-400"
-                    : "text-red-400"
-                }`}
+                className={`text-2xl font-bold ${isDeviceOnline
+                  ? "text-emerald-400"
+                  : "text-red-400"
+                  }`}
               >
-                {wifiConnected && isConnected
-                  ? "Online"
-                  : "Offline"}
+                {isDeviceOnline ? "Online" : "Offline"}
               </p>
 
               <p className="mt-1 text-xs text-slate-500">
@@ -744,13 +825,12 @@ const Page = () => {
             <div className="mt-5">
 
               <p
-                className={`text-2xl font-bold ${
-                  wifiConnected
-                    ? "text-emerald-400"
-                    : "text-red-400"
-                }`}
+                className={`text-2xl font-bold ${wifiConnected && isDeviceOnline
+                  ? "text-emerald-400"
+                  : "text-red-400"
+                  }`}
               >
-                {wifiConnected ? "Connected" : "Disconnected"}
+                {wifiConnected && isDeviceOnline ? "Connected" : "Disconnected"}
               </p>
 
               <p className="mt-1 text-xs text-slate-500">
@@ -810,17 +890,16 @@ const Page = () => {
             <div className="mt-5">
 
               <p
-                className={`text-2xl font-bold ${
-                  prediction?.status === "CRITICAL"
-                    ? "text-red-400"
-                    : prediction?.status === "WARNING" ||
-                        motionDetected ||
-                        soundDetected ||
-                        alcoholDetected ||
-                        tamperDetected
+                className={`text-2xl font-bold ${prediction?.status === "CRITICAL"
+                  ? "text-red-400"
+                  : prediction?.status === "WARNING" ||
+                    motionDetected ||
+                    soundDetected ||
+                    alcoholDetected ||
+                    tamperDetected
                     ? "text-yellow-400"
                     : "text-emerald-400"
-                }`}
+                  }`}
               >
                 {prediction ? `${prediction.riskPercentage}%` : "--"}
               </p>
@@ -834,6 +913,14 @@ const Page = () => {
           </div>
 
         </div>
+
+        {/* ================================================= */}
+        {/* AI RISK & SPOILAGE ASSESSMENT */}
+        {/* ================================================= */}
+        <section className="mb-8">
+          <PredictionSummary prediction={prediction} />
+        </section>
+
 
         {/* ================================================= */}
         {/* SENSOR CARDS */}
@@ -1406,13 +1493,13 @@ const Page = () => {
                       formatter={(value) =>
                         Number(value) === 1
                           ? [
-                              "Motion detected",
-                              "Status",
-                            ]
+                            "Motion detected",
+                            "Status",
+                          ]
                           : [
-                              "No motion",
-                              "Status",
-                            ]
+                            "No motion",
+                            "Status",
+                          ]
                       }
                     />
 
@@ -1836,12 +1923,12 @@ const Page = () => {
 
                           {reading.createdAt
                             ? new Date(
-                                reading.createdAt
-                              ).toLocaleTimeString([], {
-                                hour: "2-digit",
-                                minute: "2-digit",
-                                second: "2-digit",
-                              })
+                              reading.createdAt
+                            ).toLocaleTimeString([], {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                              second: "2-digit",
+                            })
                             : "--:--"}
 
                         </td>
@@ -1922,8 +2009,8 @@ const Page = () => {
               <InfoRow
                 label="Connection"
                 value={
-                  isConnected
-                    ? "Socket.IO Live"
+                  isDeviceOnline
+                    ? "Connected"
                     : "Disconnected"
                 }
               />
@@ -1931,7 +2018,7 @@ const Page = () => {
               <InfoRow
                 label="WiFi"
                 value={
-                  wifiConnected
+                  wifiConnected && isDeviceOnline
                     ? "Connected"
                     : "Disconnected"
                 }
@@ -2091,11 +2178,10 @@ function TriggerCard({ title, value, icon }) {
       </div>
 
       <p
-        className={`mt-4 text-xl font-bold ${
-          value
-            ? "text-yellow-400"
-            : "text-emerald-400"
-        }`}
+        className={`mt-4 text-xl font-bold ${value
+          ? "text-yellow-400"
+          : "text-emerald-400"
+          }`}
       >
         {value ? "Detected" : "Normal"}
       </p>
