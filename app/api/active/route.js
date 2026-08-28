@@ -1,23 +1,22 @@
 import { NextResponse } from "next/server";
-import { createSensorReading } from "@/controllers/sensorController";
+import { createDeviceStatus } from "@/controllers/deviceStatusController";
 
 export async function POST(request) {
-  
   try {
     const body = await request.json();
 
-    const reading = await createSensorReading(body);
+    const status = await createDeviceStatus(body);
 
     return NextResponse.json(
       {
         success: true,
-        message: "Sensor reading saved successfully",
-        data: reading,
+        message: "Device status saved successfully",
+        data: status,
       },
       { status: 201 }
-    );  
+    );
   } catch (error) {
-    console.error("Sensor reading error:", error);
+    console.error("Device status error:", error);
 
     return NextResponse.json(
       {
