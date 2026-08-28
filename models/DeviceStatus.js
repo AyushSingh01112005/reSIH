@@ -5,23 +5,22 @@ const DeviceStatusSchema = new mongoose.Schema(
     deviceId: {
       type: String,
       required: true,
-      index: true,
     },
 
     status: {
       type: Number,
+      required: true,
     },
+
     uptime_sec: {
       type: Number,
+      default: 0,
     },
   },
   {
     timestamps: true,
-  },
+  }
 );
 
-const DeviceStatus =
-  mongoose.models.DeviceStatus ||
+export default mongoose.models.DeviceStatus ||
   mongoose.model("DeviceStatus", DeviceStatusSchema);
-
-export default DeviceStatus;
