@@ -120,34 +120,7 @@ const Page = () => {
     };
   }, []);
 
-  // =====================================================
-  // SOCKET.IO SENSOR UPDATE
-  // =====================================================
-
-  const handleSensorUpdate = useCallback(
-    (data) => {
-      console.log("Dashboard received:", data);
-
-      const newReading = normalizeReading(data);
-
-      console.log("Normalized reading:", newReading);
-
-      // Update current reading
-      setSensorData(newReading);
-
-      // Add ONLY ONCE to history
-      setSensorHistory((prev) => {
-        return [newReading, ...prev].slice(0, 50);
-      });
-
-      setLastUpdate(
-        new Date(
-          newReading.createdAt || new Date().toISOString()
-        )
-      );
-    },
-    [normalizeReading]
-  );
+  
 
   // =====================================================
   // HISTORICAL DATA
