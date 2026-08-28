@@ -135,13 +135,13 @@ export default function PredictionSummary({ prediction }) {
           <div>
             <div className="flex items-center gap-2">
               <span className="text-xs font-bold tracking-wider text-blue-400 uppercase bg-blue-500/10 px-2.5 py-0.5 rounded-full">
-                AI Prediction
+                Live risk + ML shelf life
               </span>
               <span className="text-xs text-slate-500 font-mono">Real-time Analysis</span>
             </div>
             
             <h3 className="mt-2 text-lg font-bold text-white tracking-tight">
-              SiloSense Spoilage Predictor
+              SiloSense Crop Assessment
             </h3>
             
             <div className="mt-3 rounded-xl border border-slate-800/80 bg-slate-950/60 p-4">

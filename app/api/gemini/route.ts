@@ -8,6 +8,7 @@ export async function POST(request: Request) {
     const telemetry = payload.telemetry || {};
     const triggers = payload.triggers || {};
     const status = payload.status || {};
+    const modelPrediction = payload.modelPrediction || {};
     const deviceId = payload.deviceId || "Unknown";
     const timestamp_ms = payload.timestamp_ms || 0;
 
@@ -22,8 +23,19 @@ export async function POST(request: Request) {
       );
     }
 
-    const prompt = `You are an expert food preservation and cold storage bio-chemical analysis system.
-Analyze the following cold storage telemetry data for a silo storing the product: "${product}".
+    const prompt = `You are the explanation layer for a cold-storage monitoring system.
+
+This request is made only when an operator clicks the "Analyze with Gemini" button. Explain the condition of the silo using the LATEST sensor record, the SiloSense mathematical risk result, and the crop ML shelf-life result supplied below.
+
+Important rules:
+1. The risk percentage was calculated by our mathematical engine and the remaining shelf life was predicted by our crop ML model. Treat both as authoritative; do not recalculate, change, round differently, or contradict them.
+2. Explain what the latest readings and trigger flags mean in plain, practical language.
+3. State what the operator should do now. Give prioritised, concrete actions that match the detected condition. If conditions are normal, say what to continue monitoring. If risk is elevated, include immediate corrective checks such as cooling, ventilation, inspection for spoilage/fermentation, and checking sensors where relevant.
+4. Do not claim a diagnosis that is unsupported by the supplied data. This is operational guidance, not a food-safety certification.
+
+Product: "${product}"
+
+Latest sensor telemetry:
 
 Telemetry Data:
 - Temperature: ${telemetry.temperature ?? "N/A"}°C
@@ -42,12 +54,17 @@ Status:
 - Device Uptime: ${status.uptime_sec ?? "N/A"} seconds
 - Timestamp: ${timestamp_ms} ms
 
-Based on this data, provide a cold storage risk and shelf-life assessment.
-You must return your response in the following JSON format:
+Authoritative prediction outputs:
+- Overall spoilage risk: ${modelPrediction.riskPercentage ?? "N/A"}%
+- ML-predicted remaining shelf life: ${modelPrediction.remainingShelfLifeDays ?? "N/A"} days (${modelPrediction.remainingShelfLifeHours ?? "N/A"} hours)
+- Model status: ${modelPrediction.status ?? "N/A"}
+- Model alerts: ${Array.isArray(modelPrediction.alerts) && modelPrediction.alerts.length ? modelPrediction.alerts.join("; ") : "None"}
+
+Return only valid JSON in this exact format:
 {
-  "riskPercentage": <number representing overall spoilage risk, 0 to 100>,
-  "remainingShelfLifeDays": <predicted remaining shelf life in days, as a float/number>,
-  "explanation": "<a concise explanation explaining the risk factors and, if the risk is high (e.g., above 30%), detail specific actions/remediations (like lowering temperature, increasing ventilation, checking for fermentation/spoilage) to keep the storage conditions normal and safe.>"
+  "conditionSummary": "<one concise statement of the current storage condition>",
+  "explanation": "<clear explanation that refers to the supplied latest telemetry and the supplied model risk/shelf-life result>",
+  "recommendedActions": ["<prioritised action 1>", "<action 2>", "<action 3>"]
 }`;
 
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`;
@@ -102,14 +119,25 @@ You must return your response in the following JSON format:
 
     return NextResponse.json({
       success: true,
-      analysis: parsedData,
+      analysis: {
+        ...parsedData,
+        // These values must always come from the SiloSense mathematical model,
+        // never from an LLM response.
+        riskPercentage: modelPrediction.riskPercentage,
+        remainingShelfLifeDays: modelPrediction.remainingShelfLifeDays,
+        remainingShelfLifeHours: modelPrediction.remainingShelfLifeHours,
+        status: modelPrediction.status,
+      },
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Gemini Analysis Error:", error);
     return NextResponse.json(
       {
         success: false,
-        error: error.message || "Failed to analyze data with Gemini",
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to analyze data with Gemini",
       },
       { status: 500 }
     );

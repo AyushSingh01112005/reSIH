@@ -8,6 +8,7 @@ import type { ProductProfile } from "./products";
  * telemetry structure coming from SiloSense.
  */
 export type SiloSensePayload = {
+  product?: string;
   telemetry: {
     temperature: number;
     humidity: number;
@@ -63,6 +64,9 @@ export type PredictionResult = {
   remainingShelfLifeHours: number;
 
   remainingShelfLifeDays: number;
+
+  // Shelf life is supplied by the dedicated crop ML model.
+  shelfLifeSource?: "ml";
 
   cumulativeDamage: number;
 
@@ -150,29 +154,22 @@ function calculateTemperatureRisk(
   profile: ProductProfile
 ): number {
 
-  if (
-    temperature <=
-    profile.referenceTemperatureC
-  ) {
+  // The selected crop's ideal band has zero temperature stress. Outside the
+  // band, stress rises linearly to 1 at its crop-specific critical boundary.
+  if (temperature >= profile.idealTemperatureMin && temperature <= profile.idealTemperatureMax) {
     return 0;
   }
 
-  /**
-   * We consider 10°C above reference
-   * as the high-risk boundary.
-   */
-  const criticalTemperature =
-    profile.referenceTemperatureC + 10;
+  if (temperature < profile.idealTemperatureMin) {
+    return clamp01(
+      (profile.idealTemperatureMin - temperature) /
+      (profile.idealTemperatureMin - profile.criticalTemperatureMin)
+    );
+  }
 
   return clamp01(
-    (
-      temperature -
-      profile.referenceTemperatureC
-    ) /
-    (
-      criticalTemperature -
-      profile.referenceTemperatureC
-    )
+    (temperature - profile.idealTemperatureMax) /
+    (profile.criticalTemperatureMax - profile.idealTemperatureMax)
   );
 }
 
@@ -187,22 +184,20 @@ function calculateHumidityStress(
   profile: ProductProfile
 ): number {
 
-  if (
-    humidity <=
-    profile.optimalHumidity
-  ) {
-    return 0;
+  // Both dehydration and excess moisture cause loss; use the selected crop's
+  // RH band rather than applying mango limits to every commodity.
+  if (humidity < profile.idealHumidityMin) {
+    return clamp01(
+      (profile.idealHumidityMin - humidity) /
+      (profile.idealHumidityMin - 65)
+    );
   }
 
+  if (humidity <= profile.optimalHumidity) return 0;
+
   return clamp01(
-    (
-      humidity -
-      profile.optimalHumidity
-    ) /
-    (
-      profile.criticalHumidity -
-      profile.optimalHumidity
-    )
+    (humidity - profile.optimalHumidity) /
+    (profile.criticalHumidity - profile.optimalHumidity)
   );
 }
 
@@ -380,9 +375,11 @@ function updateDamage(
         )
       : 0;
 
+  // Damage is the fraction of usable shelf life consumed. A rate of 1 is the
+  // reference-condition pace, not one arbitrary damage unit per hour.
   const damageIncrease =
-    deteriorationRate *
-    deltaHours;
+    (deteriorationRate * deltaHours) /
+    profile.baselineShelfLifeHours;
 
   const newDamage =
     state.cumulativeDamage +
@@ -448,7 +445,7 @@ function calculateRemainingShelfLife(
   const remainingDamage =
     Math.max(
       0,
-      profile.baselineShelfLifeHours -
+      profile.criticalDamage -
       damage
     );
 
@@ -460,7 +457,8 @@ function calculateRemainingShelfLife(
 
   return Math.max(
     0,
-    remainingDamage / deteriorationRate
+    (remainingDamage * profile.baselineShelfLifeHours) /
+    deteriorationRate
   );
 }
 
@@ -552,14 +550,29 @@ export function predictSiloSense(
 
   /**
    * 5. TOTAL DETERIORATION RATE
+   *
+   * The calibration-derived condition life is the primary model. Convert it
+   * to a relative rate so that 1.0 is the 18-day reference pace. The separate
+   * sensor factors above are retained for explainability and risk reporting.
    */
-  const deteriorationRate =
-    calculateDeteriorationRate(
-      temperatureFactor,
-      humidityFactor,
-      gasFactor,
-      co2Factor
-    );
+  const physicalAlert =
+    triggers.motion_detected ||
+    triggers.tamper_light ||
+    triggers.sound_detected;
+
+  const conditionShelfLifeHours =
+    estimateConditionShelfLifeHours(telemetry, profile);
+
+  let deteriorationRate =
+    profile.baselineShelfLifeHours / conditionShelfLifeHours;
+
+  if (triggers.alcohol_detected) {
+    deteriorationRate *= profile.alcoholDamageMultiplier;
+  }
+
+  if (physicalAlert) {
+    deteriorationRate *= profile.physicalDamageMultiplier;
+  }
 
 
   /**
@@ -591,23 +604,18 @@ export function predictSiloSense(
    *
    * They indicate something physically suspicious.
    */
-  const physicalAlert =
-    triggers.motion_detected ||
-    triggers.tamper_light ||
-    triggers.sound_detected;
-
   const alerts: string[] = [];
 
   if (temperatureRisk >= 0.65) {
     alerts.push("Temperature is in the critical range");
   } else if (temperatureRisk >= 0.3) {
-    alerts.push("Temperature is above the mango storage target");
+    alerts.push(`Temperature is outside the ${profile.name} storage target`);
   }
 
   if (humidityStress >= 0.65) {
-    alerts.push("Humidity is critically high");
+    alerts.push(`Humidity is outside the safe ${profile.name} range`);
   } else if (humidityStress >= 0.3) {
-    alerts.push("Humidity is above the mango storage target");
+    alerts.push(`Humidity is outside the ${profile.name} storage target`);
   }
 
   if (gasStress >= 0.65) {
@@ -897,4 +905,45 @@ function generateExplanation(
     `Storage conditions are currently acceptable. ` +
     `Estimated remaining shelf life is ${rsl}.`
   );
+}
+
+
+/**
+ * Estimate shelf life at the current storage condition from the supplied
+ * mango observations. We interpolate in log-life space because shelf life is
+ * positive and deterioration is multiplicative:
+ *
+ * log(L) = sum(w_i * log(L_i)) / sum(w_i), where w_i = 1 / (d_i^2 + eps).
+ *
+ * This preserves each calibration point exactly and avoids an overfit
+ * high-order polynomial with a small, non-factorial data set.
+ */
+export function estimateConditionShelfLifeHours(
+  telemetry: SiloSensePayload["telemetry"],
+  profile: ProductProfile
+): number {
+  const { calibrationScale: scale, shelfLifeCalibration } = profile;
+  const exactMatchThreshold = 1e-12;
+  let weightedLogLife = 0;
+  let totalWeight = 0;
+
+  for (const point of shelfLifeCalibration) {
+    const distanceSquared =
+      ((telemetry.temperature - point.temperature) / scale.temperature) ** 2 +
+      ((telemetry.humidity - point.humidity) / scale.humidity) ** 2 +
+      ((telemetry.co2_sim - point.co2Ppm) / scale.co2Ppm) ** 2 +
+      ((telemetry.gas_raw - point.gasRaw) / scale.gasRaw) ** 2;
+
+    if (distanceSquared < exactMatchThreshold) {
+      return point.shelfLifeHours;
+    }
+
+    const weight = 1 / distanceSquared;
+    weightedLogLife += weight * Math.log(point.shelfLifeHours);
+    totalWeight += weight;
+  }
+
+  return totalWeight > 0
+    ? Math.exp(weightedLogLife / totalWeight)
+    : profile.baselineShelfLifeHours;
 }

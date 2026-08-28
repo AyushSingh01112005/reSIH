@@ -78,8 +78,22 @@ export async function POST(
      *
      * can determine this dynamically.
      */
-    const product =
-      PRODUCTS.mango;
+    const cropKey =
+      typeof payload.product === "string"
+        ? payload.product.toLowerCase()
+        : "mango";
+
+    const product = PRODUCTS[cropKey];
+
+    if (!product) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Unsupported crop. Choose mango, apple, tomato, or potato.",
+        },
+        { status: 400 }
+      );
+    }
 
 
     /**
@@ -87,7 +101,7 @@ export async function POST(
      */
     const previousState =
       deviceStates[
-        payload.deviceId
+        `${payload.deviceId}:${cropKey}`
       ] ?? {
 
         cumulativeDamage: 0,
@@ -112,9 +126,53 @@ export async function POST(
      * 6. Save new state.
      */
     deviceStates[
-      payload.deviceId
+      `${payload.deviceId}:${cropKey}`
     ] =
       prediction.state;
+
+    /**
+     * Shelf life is intentionally not calculated here. The mathematical
+     * engine above provides risk; the crop ML service owns RSL prediction.
+     * Keeping this request server-side avoids browser CORS configuration.
+     */
+    const mlResponse = await fetch(
+      process.env.SHELF_LIFE_ML_URL ?? "http://127.0.0.1:8000/predict",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          crop: cropKey,
+          temperature: payload.telemetry.temperature,
+          humidity: payload.telemetry.humidity,
+          co2_ppm: payload.telemetry.co2_sim,
+          raw_gas: payload.telemetry.gas_raw,
+        }),
+        signal: AbortSignal.timeout(8000),
+      }
+    );
+
+    if (!mlResponse.ok) {
+      const details = await mlResponse.text();
+      throw new Error(`Shelf-life ML service returned ${mlResponse.status}: ${details}`);
+    }
+
+    const mlPrediction = await mlResponse.json() as {
+      predicted_shelf_life_hours?: unknown;
+      predicted_shelf_life_days?: unknown;
+    };
+    const remainingShelfLifeHours = Number(mlPrediction.predicted_shelf_life_hours);
+    const remainingShelfLifeDays = Number(mlPrediction.predicted_shelf_life_days);
+
+    if (!Number.isFinite(remainingShelfLifeHours) || !Number.isFinite(remainingShelfLifeDays)) {
+      throw new Error("Shelf-life ML service returned an invalid prediction.");
+    }
+
+    const result = {
+      ...prediction.result,
+      remainingShelfLifeHours,
+      remainingShelfLifeDays,
+      shelfLifeSource: "ml" as const,
+    };
 
 
     /**
@@ -136,8 +194,12 @@ export async function POST(
       triggers:
         payload.triggers,
 
-      prediction:
-        prediction.result,
+      prediction: result,
+
+      mlPrediction: {
+        predicted_shelf_life_hours: remainingShelfLifeHours,
+        predicted_shelf_life_days: remainingShelfLifeDays,
+      },
 
       receivedAt: new Date().toISOString(),
     });

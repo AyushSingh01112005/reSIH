@@ -20,6 +20,13 @@ import {
 import PredictionSummary from "@/components/PredictionSummary";
 import DashboardAlerts from "@/components/DashboardAlerts";
 
+const CROP_OPTIONS = {
+  mango: { label: "Mango", temperature: "12–14°C", humidity: "85–90% RH" },
+  apple: { label: "Apple", temperature: "0–4°C", humidity: "90–95% RH" },
+  tomato: { label: "Tomato", temperature: "12–15°C", humidity: "85–95% RH" },
+  potato: { label: "Potato", temperature: "4–10°C", humidity: "90–95% RH" },
+};
+
 // =====================================================
 // UTILS: ALARMS & NOTIFICATIONS
 // =====================================================
@@ -100,26 +107,45 @@ const Page = () => {
   const [prediction, setPrediction] = useState(null);
   const [activeAlert, setActiveAlert] = useState(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [selectedCrop, setSelectedCrop] = useState("mango");
+  const [geminiAnalysis, setGeminiAnalysis] = useState(null);
+  const [geminiError, setGeminiError] = useState(null);
 
   const lastRiskRef = useRef(0);
   const lastStatusRef = useRef("NORMAL");
   const lastAlertTimeRef = useRef(0);
 
-  // Monitor NodeMCU device activity timeout (7 seconds)
+  // Poll the DeviceStatus heartbeat every 5 seconds. A heartbeat less than
+  // seven seconds old means the NodeMCU is online.
   useEffect(() => {
-    const checkTimeout = () => {
-      if (lastUpdate) {
-        const diffMs = Date.now() - lastUpdate.getTime();
-        setIsDeviceOnline(diffMs <= 37000);
-      } else {
-        setIsDeviceOnline(false);
+    let active = true;
+
+    const checkDeviceStatus = async () => {
+      try {
+        const response = await fetch("/api/active", { cache: "no-store" });
+        if (!response.ok) throw new Error("Failed to fetch device status");
+
+        const result = await response.json();
+        const createdAt = result.data?.createdAt;
+        const ageMs = createdAt ? Date.now() - new Date(createdAt).getTime() : Infinity;
+
+        if (active) {
+          setIsDeviceOnline(ageMs < 7000);
+        }
+      } catch (error) {
+        console.error("Error checking device status:", error);
+        if (active) setIsDeviceOnline(false);
       }
     };
 
-    checkTimeout();
-    const interval = setInterval(checkTimeout, 1000);
-    return () => clearInterval(interval);
-  }, [lastUpdate]);
+    checkDeviceStatus();
+    const interval = setInterval(checkDeviceStatus, 5000);
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   // =====================================================
   // NORMALIZE SENSOR DATA
@@ -266,7 +292,7 @@ const Page = () => {
             const predResponse = await fetch("/api/silosense/predict", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(latest),
+              body: JSON.stringify({ ...latest, product: selectedCrop }),
             });
 
             if (predResponse.ok) {
@@ -288,13 +314,13 @@ const Page = () => {
     };
 
     fetchLatestData();
-    const intervalId = setInterval(fetchLatestData, 2500);
+    const intervalId = setInterval(fetchLatestData, 10000);
 
     return () => {
       active = false;
       clearInterval(intervalId);
     };
-  }, [normalizeReading, handleRiskAlert]);
+  }, [normalizeReading, handleRiskAlert, selectedCrop]);
 
   // =====================================================
   // CURRENT VALUES
@@ -349,7 +375,11 @@ const Page = () => {
   // =====================================================
 
   const getTemperatureStatus = () => {
-    if (temperature >= 2 && temperature <= 8) {
+    const ranges = {
+      mango: [12, 14], apple: [0, 4], tomato: [12, 15], potato: [4, 10],
+    };
+    const [min, max] = ranges[selectedCrop];
+    if (temperature >= min && temperature <= max) {
       return "Normal";
     }
 
@@ -357,7 +387,8 @@ const Page = () => {
   };
 
   const getHumidityStatus = () => {
-    if (humidity <= 90) {
+    const minimum = selectedCrop === "mango" ? 85 : 90;
+    if (humidity >= minimum && humidity <= 95) {
       return "Normal";
     }
 
@@ -373,11 +404,79 @@ const Page = () => {
   };
 
   const getAirQualityStatus = () => {
-    if (gas < 300) {
+    if (gas <= 1000) {
       return "Good";
     }
 
     return "Poor";
+  };
+
+  // Refresh the source record when the operator asks for analysis so Gemini
+  // always receives the newest available telemetry and model output.
+  const handleGeminiAnalysis = async () => {
+    if (isAnalyzing) return;
+
+    setIsAnalyzing(true);
+    setGeminiError(null);
+
+    try {
+      const latestResponse = await fetch("/api/getSensor?limit=1", {
+        cache: "no-store",
+      });
+      const latestJson = await latestResponse.json();
+
+      if (!latestResponse.ok || !latestJson.success || !latestJson.data?.[0]) {
+        throw new Error("The latest sensor reading is not available yet.");
+      }
+
+      const latestReading = normalizeReading(latestJson.data[0]);
+      setSensorData(latestReading);
+      setLastUpdate(new Date(latestReading.createdAt));
+
+      const predictionResponse = await fetch("/api/silosense/predict", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(latestReading),
+      });
+      const predictionJson = await predictionResponse.json();
+
+      if (!predictionResponse.ok || !predictionJson.success) {
+        throw new Error(predictionJson.error || "Could not calculate the SiloSense prediction.");
+      }
+
+      const latestPrediction = predictionJson.prediction;
+      setPrediction(latestPrediction);
+      handleRiskAlert(latestPrediction);
+
+      const response = await fetch("/api/gemini", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          product: selectedCrop,
+          telemetry: latestReading.telemetry,
+          triggers: latestReading.triggers,
+          status: latestReading.status,
+          deviceId: latestReading.deviceId,
+          timestamp_ms: latestReading.timestamp_ms,
+          modelPrediction: latestPrediction,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Gemini could not complete the analysis.");
+      }
+
+      setGeminiAnalysis({
+        ...data.analysis,
+        analyzedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.error("Gemini analysis request failed:", error);
+      setGeminiError(error.message || "Unable to complete the Gemini analysis.");
+    } finally {
+      setIsAnalyzing(false);
+    }
   };
 
   const getStatusClass = (status) => {
@@ -601,7 +700,7 @@ const Page = () => {
       value: `${temperature}°C`,
       status: getTemperatureStatus(),
       icon: "🌡️",
-      description: "Recommended 2°C – 8°C",
+      description: `${CROP_OPTIONS[selectedCrop].label} target: ${CROP_OPTIONS[selectedCrop].temperature}`,
     },
 
     {
@@ -766,6 +865,35 @@ const Page = () => {
 
         </div>
 
+        <section className="mb-8 rounded-2xl border border-blue-500/20 bg-blue-950/15 p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-white">Stored crop</p>
+              <p className="mt-1 text-xs text-slate-400">Risk is calculated for this crop; shelf life is predicted by the ML model.</p>
+            </div>
+            <label className="flex items-center gap-3 text-sm text-slate-300">
+              Crop
+              <select
+                value={selectedCrop}
+                onChange={(event) => {
+                  setSelectedCrop(event.target.value);
+                  setPrediction(null);
+                  setGeminiAnalysis(null);
+                  setGeminiError(null);
+                }}
+                className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 font-medium text-white outline-none transition focus:border-blue-400"
+              >
+                {Object.entries(CROP_OPTIONS).map(([value, crop]) => (
+                  <option key={value} value={value}>{crop.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <p className="mt-3 text-xs text-blue-200/80">
+            Target: {CROP_OPTIONS[selectedCrop].temperature} · {CROP_OPTIONS[selectedCrop].humidity}
+          </p>
+        </section>
+
         {/* ================================================= */}
         {/* TOP STATUS CARDS */}
         {/* ================================================= */}
@@ -929,57 +1057,11 @@ const Page = () => {
               </div>
               <h4 className="mt-1 text-sm font-semibold text-white">Biochemical Cold Storage Analysis</h4>
               <p className="mt-1 text-xs text-slate-400">
-                Run an advanced AI analysis of the current environmental telemetry. Results are printed to your browser's developer console.
+                Analyze the newest sensor record with the SiloSense mathematical-model risk and shelf-life prediction.
               </p>
             </div>
             <button
-              onClick={async () => {
-                if (isAnalyzing) return;
-                setIsAnalyzing(true);
-                console.log("====================================================");
-                console.log("🤖 Starting Google Gemini LLM Analysis...");
-                console.log("Analyzing product: Mango");
-                console.log("Telemetry Payload:", {
-                  telemetry: sensorData.telemetry,
-                  triggers: sensorData.triggers,
-                  status: sensorData.status,
-                  deviceId: sensorData.deviceId,
-                  timestamp_ms: sensorData.timestamp_ms
-                });
-                
-                try {
-                  const res = await fetch("/api/gemini", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      product: "mango",
-                      telemetry: sensorData.telemetry,
-                      triggers: sensorData.triggers,
-                      status: sensorData.status,
-                      deviceId: sensorData.deviceId,
-                      timestamp_ms: sensorData.timestamp_ms
-                    })
-                  });
-                  
-                  const data = await res.json();
-                  if (data.success) {
-                    console.group("🥭 Google Gemini Biochemical Spoilage Risk Assessment");
-                    console.log("Overall Spoilage Risk Percentage:", data.analysis.riskPercentage + "%");
-                    console.log("Remaining Shelf Life Prediction:", data.analysis.remainingShelfLifeDays + " Days");
-                    console.log("Biochemical Analysis & Mitigation Recommendation:", data.analysis.explanation);
-                    console.groupEnd();
-                    alert("Gemini analysis complete! Please open your browser's Developer Console (F12) to view the detailed biochemical assessment.");
-                  } else {
-                    console.error("Gemini API Error:", data.error);
-                    alert("Gemini Analysis failed: " + data.error);
-                  }
-                } catch (error) {
-                  console.error("Gemini Analysis Request Failed:", error);
-                  alert("Failed to connect to the Gemini API endpoint. Ensure GEMINI_API_KEY is configured in your .env.local file.");
-                } finally {
-                  setIsAnalyzing(false);
-                }
-              }}
+              onClick={handleGeminiAnalysis}
               disabled={isAnalyzing}
               className={`flex h-10 items-center justify-center rounded-xl px-5 text-xs font-bold transition-all duration-300 ${
                 isAnalyzing
@@ -997,6 +1079,51 @@ const Page = () => {
               )}
             </button>
           </div>
+
+          {geminiError && (
+            <div className="mt-4 rounded-2xl border border-red-500/30 bg-red-950/20 p-4 text-sm text-red-200">
+              <span className="font-semibold">AI analysis unavailable:</span> {geminiError}
+            </div>
+          )}
+
+          {geminiAnalysis && (
+            <div className="mt-4 rounded-2xl border border-blue-500/25 bg-slate-950/70 p-5 shadow-lg shadow-blue-950/20">
+              <div className="flex flex-col gap-3 border-b border-slate-800 pb-4 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wider text-blue-400">Gemini operational guidance</p>
+                  <h4 className="mt-1 text-base font-semibold text-white">{geminiAnalysis.conditionSummary || "Latest storage-condition assessment"}</h4>
+                </div>
+                <p className="text-xs text-slate-500">Latest reading analyzed {new Date(geminiAnalysis.analyzedAt).toLocaleTimeString()}</p>
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div className="rounded-xl bg-slate-900/80 p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Model spoilage risk</p>
+                  <p className="mt-1 text-2xl font-bold text-amber-300">{geminiAnalysis.riskPercentage}%</p>
+                </div>
+                <div className="rounded-xl bg-slate-900/80 p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">ML remaining shelf life</p>
+                  <p className="mt-1 text-2xl font-bold text-emerald-300">{Number(geminiAnalysis.remainingShelfLifeDays).toFixed(1)} days</p>
+                </div>
+              </div>
+
+              <p className="mt-4 text-sm leading-6 text-slate-300">{geminiAnalysis.explanation}</p>
+
+              {Array.isArray(geminiAnalysis.recommendedActions) && geminiAnalysis.recommendedActions.length > 0 && (
+                <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+                  <p className="text-xs font-bold uppercase tracking-wider text-emerald-400">What to do now</p>
+                  <ol className="mt-3 space-y-2 text-sm text-slate-300">
+                    {geminiAnalysis.recommendedActions.map((action, index) => (
+                      <li key={`${action}-${index}`} className="flex gap-3">
+                        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-xs font-bold text-emerald-300">{index + 1}</span>
+                        <span>{action}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+            </div>
+          )}
         </section>
 
 
@@ -2043,7 +2170,7 @@ const Page = () => {
 
               <StorageItem
                 title="Stored Produce"
-                value="Potatoes"
+                value={`${CROP_OPTIONS[selectedCrop].label}s`}
               />
 
               <StorageItem
