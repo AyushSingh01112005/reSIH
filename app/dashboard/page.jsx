@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, useEffect, useRef } from "react";
 
 import {
   LineChart,
@@ -17,7 +17,59 @@ import {
   ReferenceLine,
 } from "recharts";
 
-import SensorHistory from "@/components/SensorHistory";
+import PredictionSummary from "@/components/PredictionSummary";
+import DashboardAlerts from "@/components/DashboardAlerts";
+
+const CROP_OPTIONS = {
+  mango: { label: "Mango", temperature: "12–14°C", humidity: "85–90% RH" },
+  apple: { label: "Apple", temperature: "0–4°C", humidity: "90–95% RH" },
+  tomato: { label: "Tomato", temperature: "12–15°C", humidity: "85–95% RH" },
+  potato: { label: "Potato", temperature: "4–10°C", humidity: "90–95% RH" },
+};
+
+// =====================================================
+// UTILS: ALARMS & NOTIFICATIONS
+// =====================================================
+
+const playBuzzerSound = () => {
+  if (typeof window === "undefined") return;
+  try {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+
+    oscillator.type = "sawtooth";
+    oscillator.frequency.setValueAtTime(180, audioCtx.currentTime);
+
+    const now = audioCtx.currentTime;
+    oscillator.frequency.setValueAtTime(180, now);
+    oscillator.frequency.linearRampToValueAtTime(250, now + 0.15);
+    oscillator.frequency.linearRampToValueAtTime(180, now + 0.3);
+    oscillator.frequency.linearRampToValueAtTime(250, now + 0.45);
+    oscillator.frequency.linearRampToValueAtTime(180, now + 0.6);
+
+    gainNode.gain.setValueAtTime(0, now);
+    gainNode.gain.linearRampToValueAtTime(0.3, now + 0.05);
+    gainNode.gain.setValueAtTime(0.3, now + 0.55);
+    gainNode.gain.linearRampToValueAtTime(0, now + 0.6);
+
+    oscillator.start(now);
+    oscillator.stop(now + 0.6);
+  } catch (err) {
+    console.warn("AudioContext playback blocked/failed:", err);
+  }
+};
+
+const sendDesktopNotification = (title, body) => {
+  if (typeof window === "undefined" || !("Notification" in window)) return;
+
+  if (Notification.permission === "granted") {
+    new Notification(title, { body });
+  }
+};
 
 const Page = () => {
   const [sensorData, setSensorData] = useState({
@@ -51,6 +103,49 @@ const Page = () => {
   const [sensorHistory, setSensorHistory] = useState([]);
   const [lastUpdate, setLastUpdate] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
+  const [isDeviceOnline, setIsDeviceOnline] = useState(false);
+  const [prediction, setPrediction] = useState(null);
+  const [activeAlert, setActiveAlert] = useState(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [selectedCrop, setSelectedCrop] = useState("mango");
+  const [geminiAnalysis, setGeminiAnalysis] = useState(null);
+  const [geminiError, setGeminiError] = useState(null);
+
+  const lastRiskRef = useRef(0);
+  const lastStatusRef = useRef("NORMAL");
+  const lastAlertTimeRef = useRef(0);
+
+  // Poll the DeviceStatus heartbeat every 5 seconds. A heartbeat less than
+  // seven seconds old means the NodeMCU is online.
+  useEffect(() => {
+    let active = true;
+
+    const checkDeviceStatus = async () => {
+      try {
+        const response = await fetch("/api/active", { cache: "no-store" });
+        if (!response.ok) throw new Error("Failed to fetch device status");
+
+        const result = await response.json();
+        const createdAt = result.data?.createdAt;
+        const ageMs = createdAt ? Date.now() - new Date(createdAt).getTime() : Infinity;
+
+        if (active) {
+          setIsDeviceOnline(ageMs < 7000);
+        }
+      } catch (error) {
+        console.error("Error checking device status:", error);
+        if (active) setIsDeviceOnline(false);
+      }
+    };
+
+    checkDeviceStatus();
+    const interval = setInterval(checkDeviceStatus, 5000);
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   // =====================================================
   // NORMALIZE SENSOR DATA
@@ -122,43 +217,81 @@ const Page = () => {
 
   
 
-  // =====================================================
-  // HISTORICAL DATA
-  // =====================================================
+        // UI Toast Alert
+        setActiveAlert({
+          title: `Silo Alert: ${pred.status}`,
+          message: pred.explanation || `Spoilage risk has reached ${pred.riskPercentage}%. Please check storage conditions immediately.`,
+          status: pred.status,
+          time: new Date().toLocaleTimeString()
+        });
 
-  const handleHistoricalData = useCallback(
-    (data) => {
-      if (!Array.isArray(data)) {
-        console.warn("Historical sensor data is not an array:", data);
-        return;
+        lastAlertTimeRef.current = now;
       }
+    } else {
+      setActiveAlert(null);
+    }
 
-      const normalized = data.map(normalizeReading);
-
-      setSensorHistory(normalized.slice(0, 50));
-
-      if (normalized.length > 0) {
-        const latest = normalized[0];
-
-        setSensorData(latest);
-
-        setLastUpdate(
-          new Date(
-            latest.createdAt || new Date().toISOString()
-          )
-        );
-      }
-    },
-    [normalizeReading]
-  );
-
-  // =====================================================
-  // CONNECTION
-  // =====================================================
-
-  const handleConnectionChange = useCallback((connected) => {
-    setIsConnected(connected);
+    lastStatusRef.current = pred.status || "NORMAL";
+    lastRiskRef.current = pred.riskPercentage || 0;
   }, []);
+
+  // =====================================================
+  // REAL-TIME DATA POLLING (Every 2.5 seconds)
+  // =====================================================
+  useEffect(() => {
+    let active = true;
+
+    const fetchLatestData = async () => {
+      try {
+        const res = await fetch("/api/getSensor?limit=50");
+        if (!res.ok) throw new Error("Failed to fetch sensor data");
+        const json = await res.json();
+
+        if (!active) return;
+
+        if (json.success && Array.isArray(json.data)) {
+          setIsConnected(true);
+          const normalized = json.data.map(normalizeReading);
+          setSensorHistory(normalized.slice(0, 50));
+
+          if (normalized.length > 0) {
+            const latest = normalized[0];
+            setSensorData(latest);
+            setLastUpdate(new Date(latest.createdAt || new Date().toISOString()));
+
+            // Fetch prediction for the latest reading
+            const predResponse = await fetch("/api/silosense/predict", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ ...latest, product: selectedCrop }),
+            });
+
+            if (predResponse.ok) {
+              const predJson = await predResponse.json();
+              if (active && predJson.success) {
+                const predData = predJson.prediction || null;
+                setPrediction(predData);
+                handleRiskAlert(predData);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Error in polling fetch:", error);
+        if (active) {
+          setIsConnected(false);
+        }
+      }
+    };
+
+    fetchLatestData();
+    const intervalId = setInterval(fetchLatestData, 10000);
+
+    return () => {
+      active = false;
+      clearInterval(intervalId);
+    };
+  }, [normalizeReading, handleRiskAlert, selectedCrop]);
 
   // =====================================================
   // CURRENT VALUES
@@ -213,7 +346,11 @@ const Page = () => {
   // =====================================================
 
   const getTemperatureStatus = () => {
-    if (temperature >= 2 && temperature <= 8) {
+    const ranges = {
+      mango: [12, 14], apple: [0, 4], tomato: [12, 15], potato: [4, 10],
+    };
+    const [min, max] = ranges[selectedCrop];
+    if (temperature >= min && temperature <= max) {
       return "Normal";
     }
 
@@ -221,7 +358,8 @@ const Page = () => {
   };
 
   const getHumidityStatus = () => {
-    if (humidity <= 90) {
+    const minimum = selectedCrop === "mango" ? 85 : 90;
+    if (humidity >= minimum && humidity <= 95) {
       return "Normal";
     }
 
@@ -237,11 +375,79 @@ const Page = () => {
   };
 
   const getAirQualityStatus = () => {
-    if (gas < 300) {
+    if (gas <= 1000) {
       return "Good";
     }
 
     return "Poor";
+  };
+
+  // Refresh the source record when the operator asks for analysis so Gemini
+  // always receives the newest available telemetry and model output.
+  const handleGeminiAnalysis = async () => {
+    if (isAnalyzing) return;
+
+    setIsAnalyzing(true);
+    setGeminiError(null);
+
+    try {
+      const latestResponse = await fetch("/api/getSensor?limit=1", {
+        cache: "no-store",
+      });
+      const latestJson = await latestResponse.json();
+
+      if (!latestResponse.ok || !latestJson.success || !latestJson.data?.[0]) {
+        throw new Error("The latest sensor reading is not available yet.");
+      }
+
+      const latestReading = normalizeReading(latestJson.data[0]);
+      setSensorData(latestReading);
+      setLastUpdate(new Date(latestReading.createdAt));
+
+      const predictionResponse = await fetch("/api/silosense/predict", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(latestReading),
+      });
+      const predictionJson = await predictionResponse.json();
+
+      if (!predictionResponse.ok || !predictionJson.success) {
+        throw new Error(predictionJson.error || "Could not calculate the SiloSense prediction.");
+      }
+
+      const latestPrediction = predictionJson.prediction;
+      setPrediction(latestPrediction);
+      handleRiskAlert(latestPrediction);
+
+      const response = await fetch("/api/gemini", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          product: selectedCrop,
+          telemetry: latestReading.telemetry,
+          triggers: latestReading.triggers,
+          status: latestReading.status,
+          deviceId: latestReading.deviceId,
+          timestamp_ms: latestReading.timestamp_ms,
+          modelPrediction: latestPrediction,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Gemini could not complete the analysis.");
+      }
+
+      setGeminiAnalysis({
+        ...data.analysis,
+        analyzedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.error("Gemini analysis request failed:", error);
+      setGeminiError(error.message || "Unable to complete the Gemini analysis.");
+    } finally {
+      setIsAnalyzing(false);
+    }
   };
 
   const getStatusClass = (status) => {
@@ -465,7 +671,7 @@ const Page = () => {
       value: `${temperature}°C`,
       status: getTemperatureStatus(),
       icon: "🌡️",
-      description: "Recommended 2°C – 8°C",
+      description: `${CROP_OPTIONS[selectedCrop].label} target: ${CROP_OPTIONS[selectedCrop].temperature}`,
     },
 
     {
@@ -499,14 +705,6 @@ const Page = () => {
 
   return (
     <div className="min-h-screen bg-[#020617] text-white">
-
-
-
-      {/* HISTORICAL DATA */}
-
-      <SensorHistory
-        onData={handleHistoricalData}
-      />
 
       {/* ================================================= */}
       {/* HEADER */}
@@ -551,29 +749,26 @@ const Page = () => {
             </div>
 
             <div
-              className={`flex items-center gap-2 rounded-full border px-4 py-2 ${
-                isConnected
-                  ? "border-emerald-500/20 bg-emerald-500/10"
-                  : "border-red-500/20 bg-red-500/10"
-              }`}
+              className={`flex items-center gap-2 rounded-full border px-4 py-2 ${isDeviceOnline
+                ? "border-emerald-500/20 bg-emerald-500/10"
+                : "border-red-500/20 bg-red-500/10"
+                }`}
             >
 
               <span
-                className={`h-2 w-2 rounded-full ${
-                  isConnected
-                    ? "bg-emerald-400 animate-pulse"
-                    : "bg-red-400"
-                }`}
+                className={`h-2 w-2 rounded-full ${isDeviceOnline
+                  ? "bg-emerald-400 animate-pulse"
+                  : "bg-red-400"
+                  }`}
               />
 
               <span
-                className={`text-xs font-medium ${
-                  isConnected
-                    ? "text-emerald-400"
-                    : "text-red-400"
-                }`}
+                className={`text-xs font-medium ${isDeviceOnline
+                  ? "text-emerald-400"
+                  : "text-red-400"
+                  }`}
               >
-                {isConnected ? "Live" : "Offline"}
+                {isDeviceOnline ? "Connected" : "Disconnected"}
               </span>
 
             </div>
@@ -589,6 +784,17 @@ const Page = () => {
       {/* ================================================= */}
 
       <main className="mx-auto max-w-7xl px-6 py-8">
+
+        {/* ALERTS SYSTEM */}
+        <div className="mb-6">
+          <DashboardAlerts
+            isDeviceOnline={isDeviceOnline}
+            lastUpdate={lastUpdate}
+            prediction={prediction}
+            activeAlert={activeAlert}
+            onDismissAlert={() => setActiveAlert(null)}
+          />
+        </div>
 
         {/* TITLE */}
 
@@ -630,6 +836,35 @@ const Page = () => {
 
         </div>
 
+        <section className="mb-8 rounded-2xl border border-blue-500/20 bg-blue-950/15 p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-white">Stored crop</p>
+              <p className="mt-1 text-xs text-slate-400">Risk is calculated for this crop; shelf life is predicted by the ML model.</p>
+            </div>
+            <label className="flex items-center gap-3 text-sm text-slate-300">
+              Crop
+              <select
+                value={selectedCrop}
+                onChange={(event) => {
+                  setSelectedCrop(event.target.value);
+                  setPrediction(null);
+                  setGeminiAnalysis(null);
+                  setGeminiError(null);
+                }}
+                className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 font-medium text-white outline-none transition focus:border-blue-400"
+              >
+                {Object.entries(CROP_OPTIONS).map(([value, crop]) => (
+                  <option key={value} value={value}>{crop.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <p className="mt-3 text-xs text-blue-200/80">
+            Target: {CROP_OPTIONS[selectedCrop].temperature} · {CROP_OPTIONS[selectedCrop].humidity}
+          </p>
+        </section>
+
         {/* ================================================= */}
         {/* TOP STATUS CARDS */}
         {/* ================================================= */}
@@ -655,15 +890,12 @@ const Page = () => {
             <div className="mt-5">
 
               <p
-                className={`text-2xl font-bold ${
-                  wifiConnected && isConnected
-                    ? "text-emerald-400"
-                    : "text-red-400"
-                }`}
+                className={`text-2xl font-bold ${isDeviceOnline
+                  ? "text-emerald-400"
+                  : "text-red-400"
+                  }`}
               >
-                {wifiConnected && isConnected
-                  ? "Online"
-                  : "Offline"}
+                {isDeviceOnline ? "Online" : "Offline"}
               </p>
 
               <p className="mt-1 text-xs text-slate-500">
@@ -693,13 +925,12 @@ const Page = () => {
             <div className="mt-5">
 
               <p
-                className={`text-2xl font-bold ${
-                  wifiConnected
-                    ? "text-emerald-400"
-                    : "text-red-400"
-                }`}
+                className={`text-2xl font-bold ${wifiConnected && isDeviceOnline
+                  ? "text-emerald-400"
+                  : "text-red-400"
+                  }`}
               >
-                {wifiConnected ? "Connected" : "Disconnected"}
+                {wifiConnected && isDeviceOnline ? "Connected" : "Disconnected"}
               </p>
 
               <p className="mt-1 text-xs text-slate-500">
@@ -759,27 +990,22 @@ const Page = () => {
             <div className="mt-5">
 
               <p
-                className={`text-2xl font-bold ${
-                  motionDetected ||
-                  soundDetected ||
-                  alcoholDetected ||
-                  tamperDetected
+                className={`text-2xl font-bold ${prediction?.status === "CRITICAL"
+                  ? "text-red-400"
+                  : prediction?.status === "WARNING" ||
+                    motionDetected ||
+                    soundDetected ||
+                    alcoholDetected ||
+                    tamperDetected
                     ? "text-yellow-400"
                     : "text-emerald-400"
-                }`}
+                  }`}
               >
-                {
-                  [
-                    motionDetected,
-                    soundDetected,
-                    alcoholDetected,
-                    tamperDetected,
-                  ].filter(Boolean).length
-                }
+                {prediction ? `${prediction.riskPercentage}%` : "--"}
               </p>
 
               <p className="mt-1 text-xs text-slate-500">
-                Current sensor triggers
+                {prediction?.alerts?.[0] || "No active alerts"}
               </p>
 
             </div>
@@ -787,6 +1013,90 @@ const Page = () => {
           </div>
 
         </div>
+
+        {/* ================================================= */}
+        {/* AI RISK & SPOILAGE ASSESSMENT */}
+        {/* ================================================= */}
+        <section className="mb-8">
+          <PredictionSummary prediction={prediction} />
+          
+          <div className="mt-4 flex flex-col justify-between gap-4 rounded-2xl border border-slate-800 bg-gradient-to-r from-blue-950/20 to-indigo-950/20 p-5 backdrop-blur-md md:flex-row md:items-center">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-blue-400">Google Gemini LLM</span>
+                <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-400">Free Tier Active</span>
+              </div>
+              <h4 className="mt-1 text-sm font-semibold text-white">Biochemical Cold Storage Analysis</h4>
+              <p className="mt-1 text-xs text-slate-400">
+                Analyze the newest sensor record with the SiloSense mathematical-model risk and shelf-life prediction.
+              </p>
+            </div>
+            <button
+              onClick={handleGeminiAnalysis}
+              disabled={isAnalyzing}
+              className={`flex h-10 items-center justify-center rounded-xl px-5 text-xs font-bold transition-all duration-300 ${
+                isAnalyzing
+                  ? "bg-slate-800 text-slate-500 cursor-not-allowed"
+                  : "bg-blue-600 text-white hover:bg-blue-500 active:scale-95 shadow-md shadow-blue-500/10"
+              }`}
+            >
+              {isAnalyzing ? (
+                <span className="flex items-center gap-2">
+                  <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-500 border-t-white" />
+                  Analyzing...
+                </span>
+              ) : (
+                "Analyze with Gemini"
+              )}
+            </button>
+          </div>
+
+          {geminiError && (
+            <div className="mt-4 rounded-2xl border border-red-500/30 bg-red-950/20 p-4 text-sm text-red-200">
+              <span className="font-semibold">AI analysis unavailable:</span> {geminiError}
+            </div>
+          )}
+
+          {geminiAnalysis && (
+            <div className="mt-4 rounded-2xl border border-blue-500/25 bg-slate-950/70 p-5 shadow-lg shadow-blue-950/20">
+              <div className="flex flex-col gap-3 border-b border-slate-800 pb-4 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wider text-blue-400">Gemini operational guidance</p>
+                  <h4 className="mt-1 text-base font-semibold text-white">{geminiAnalysis.conditionSummary || "Latest storage-condition assessment"}</h4>
+                </div>
+                <p className="text-xs text-slate-500">Latest reading analyzed {new Date(geminiAnalysis.analyzedAt).toLocaleTimeString()}</p>
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div className="rounded-xl bg-slate-900/80 p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Model spoilage risk</p>
+                  <p className="mt-1 text-2xl font-bold text-amber-300">{geminiAnalysis.riskPercentage}%</p>
+                </div>
+                <div className="rounded-xl bg-slate-900/80 p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">ML remaining shelf life</p>
+                  <p className="mt-1 text-2xl font-bold text-emerald-300">{Number(geminiAnalysis.remainingShelfLifeDays).toFixed(1)} days</p>
+                </div>
+              </div>
+
+              <p className="mt-4 text-sm leading-6 text-slate-300">{geminiAnalysis.explanation}</p>
+
+              {Array.isArray(geminiAnalysis.recommendedActions) && geminiAnalysis.recommendedActions.length > 0 && (
+                <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+                  <p className="text-xs font-bold uppercase tracking-wider text-emerald-400">What to do now</p>
+                  <ol className="mt-3 space-y-2 text-sm text-slate-300">
+                    {geminiAnalysis.recommendedActions.map((action, index) => (
+                      <li key={`${action}-${index}`} className="flex gap-3">
+                        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-xs font-bold text-emerald-300">{index + 1}</span>
+                        <span>{action}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+
 
         {/* ================================================= */}
         {/* SENSOR CARDS */}
@@ -1359,13 +1669,13 @@ const Page = () => {
                       formatter={(value) =>
                         Number(value) === 1
                           ? [
-                              "Motion detected",
-                              "Status",
-                            ]
+                            "Motion detected",
+                            "Status",
+                          ]
                           : [
-                              "No motion",
-                              "Status",
-                            ]
+                            "No motion",
+                            "Status",
+                          ]
                       }
                     />
 
@@ -1789,12 +2099,12 @@ const Page = () => {
 
                           {reading.createdAt
                             ? new Date(
-                                reading.createdAt
-                              ).toLocaleTimeString([], {
-                                hour: "2-digit",
-                                minute: "2-digit",
-                                second: "2-digit",
-                              })
+                              reading.createdAt
+                            ).toLocaleTimeString([], {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                              second: "2-digit",
+                            })
                             : "--:--"}
 
                         </td>
@@ -1831,7 +2141,7 @@ const Page = () => {
 
               <StorageItem
                 title="Stored Produce"
-                value="Potatoes"
+                value={`${CROP_OPTIONS[selectedCrop].label}s`}
               />
 
               <StorageItem
@@ -1846,7 +2156,11 @@ const Page = () => {
 
               <StorageItem
                 title="Shelf Life"
-                value="24 Days"
+                value={
+                  prediction?.remainingShelfLifeDays != null
+                    ? `${prediction.remainingShelfLifeDays} Days`
+                    : "--"
+                }
               />
 
             </div>
@@ -1871,8 +2185,8 @@ const Page = () => {
               <InfoRow
                 label="Connection"
                 value={
-                  isConnected
-                    ? "Socket.IO Live"
+                  isDeviceOnline
+                    ? "Connected"
                     : "Disconnected"
                 }
               />
@@ -1880,7 +2194,7 @@ const Page = () => {
               <InfoRow
                 label="WiFi"
                 value={
-                  wifiConnected
+                  wifiConnected && isDeviceOnline
                     ? "Connected"
                     : "Disconnected"
                 }
@@ -2040,11 +2354,10 @@ function TriggerCard({ title, value, icon }) {
       </div>
 
       <p
-        className={`mt-4 text-xl font-bold ${
-          value
-            ? "text-yellow-400"
-            : "text-emerald-400"
-        }`}
+        className={`mt-4 text-xl font-bold ${value
+          ? "text-yellow-400"
+          : "text-emerald-400"
+          }`}
       >
         {value ? "Detected" : "Normal"}
       </p>
