@@ -15,7 +15,7 @@ export async function POST(request) {
         data: reading,
       },
       { status: 201 }
-    );
+    );  
   } catch (error) {
     console.error("Sensor reading error:", error);
 
