@@ -215,7 +215,36 @@ const Page = () => {
     };
   }, []);
 
-  
+  // Request browser notification permission on mount
+  useEffect(() => {
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  // Trigger alert / buzzer logic
+  const handleRiskAlert = useCallback((pred) => {
+    if (!pred) return;
+
+    const isHighRisk = pred.riskPercentage >= 40 || pred.status === "WARNING" || pred.status === "CRITICAL";
+
+    if (isHighRisk) {
+      const now = Date.now();
+      const statusWorsened =
+        (pred.status === "CRITICAL" && lastStatusRef.current !== "CRITICAL") ||
+        (pred.status === "WARNING" && lastStatusRef.current === "NORMAL");
+
+      const timeElapsed = now - lastAlertTimeRef.current > 15000;
+
+      if (statusWorsened || timeElapsed) {
+        // Play buzzer sound
+        // playBuzzerSound();
+
+        // Desktop notification
+        sendDesktopNotification(
+          `⚠️ SiloSense Alert: ${pred.status} Status`,
+          pred.explanation || `Silo spoilage risk has reached ${pred.riskPercentage}%.`
+        );
 
         // UI Toast Alert
         setActiveAlert({
