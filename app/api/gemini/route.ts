@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { calculateCO2PPM } from "@/lib/silosense/telemetry";
 
 export async function POST(request: Request) {
   try {
@@ -6,6 +7,9 @@ export async function POST(request: Request) {
 
     const product = payload.product || "mango";
     const telemetry = payload.telemetry || {};
+    const co2Ppm = calculateCO2PPM(
+      telemetry.raw_gas ?? telemetry.gas_raw
+    );
     const triggers = payload.triggers || {};
     const status = payload.status || {};
     const modelPrediction = payload.modelPrediction || {};
@@ -41,7 +45,7 @@ Telemetry Data:
 - Temperature: ${telemetry.temperature ?? "N/A"}°C
 - Humidity: ${telemetry.humidity ?? "N/A"}%
 - Raw VOC Gas levels (MQ135 index): ${telemetry.gas_raw ?? "N/A"}
-- Carbon Dioxide (CO2) simulated: ${telemetry.co2_sim ?? "N/A"} ppm
+- Carbon Dioxide (CO2) estimated from MQ135: ${co2Ppm ?? telemetry.co2_ppm_est ?? telemetry.co2_sim ?? "N/A"} ppm
 
 Triggers / Flags:
 - Alcohol Detected (Fruit fermentation): ${triggers.alcohol_detected ?? "false"}

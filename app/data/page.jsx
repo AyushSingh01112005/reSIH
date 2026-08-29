@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { calculateCO2PPM } from "@/lib/silosense/telemetry";
 
 import {
   ResponsiveContainer,
@@ -48,14 +49,6 @@ export default function DataPage() {
           0
       ),
 
-      co2: Number(
-        reading.telemetry?.co2_ppm ??
-          reading.telemetry?.co2_sim ??
-          reading.co2_ppm ??
-          reading.co2 ??
-          0
-      ),
-
       gas: Number(
         reading.telemetry?.raw_gas ??
           reading.telemetry?.gas_raw ??
@@ -63,6 +56,22 @@ export default function DataPage() {
           reading.gas ??
           0
       ),
+
+      co2:
+        calculateCO2PPM(
+          reading.telemetry?.raw_gas ??
+            reading.telemetry?.gas_raw ??
+            reading.raw_gas ??
+            reading.gas
+        ) ??
+        Number(
+          reading.telemetry?.co2_ppm_est ??
+            reading.telemetry?.co2_ppm ??
+            reading.telemetry?.co2_sim ??
+            reading.co2_ppm ??
+            reading.co2 ??
+            0
+        ),
 
       createdAt:
         reading.createdAt ??

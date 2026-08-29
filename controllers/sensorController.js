@@ -1,5 +1,6 @@
 import SensorReading from "@/models/SensorReading";
 import connectDb from "@/lib/mongodb";
+import { calculateCO2PPM } from "@/lib/silosense/telemetry";
 
 export async function createSensorReading(data) {
   try {
@@ -35,12 +36,20 @@ export async function createSensorReading(data) {
       throw new Error("telemetry data is required");
     }
 
-    // Save sensor reading
+    const co2Ppm = calculateCO2PPM(
+      telemetry.gas_raw ?? telemetry.raw_gas
+    );
+
+    // Save sensor reading. CO2 is always derived from the raw MQ135 reading
+    // so device-supplied estimates cannot make dashboard and ML values diverge.
     const reading = await SensorReading.create({
       deviceId,
       timestamp_ms,
 
-      telemetry: telemetry || {},
+      telemetry: {
+        ...telemetry,
+        ...(co2Ppm === null ? {} : { co2_ppm_est: co2Ppm }),
+      },
 
       triggers: triggers || {},
 

@@ -11,6 +11,7 @@ import {
 import {
   PRODUCTS,
 } from "@/lib/silosense/products";
+import { calculateCO2PPM } from "@/lib/silosense/telemetry";
 
 
 /**
@@ -50,8 +51,7 @@ export async function POST(
       !Number.isFinite(payload.timestamp_ms) ||
       !Number.isFinite(payload.telemetry.temperature) ||
       !Number.isFinite(payload.telemetry.humidity) ||
-      !Number.isFinite(payload.telemetry.gas_raw) ||
-      !Number.isFinite(payload.telemetry.co2_sim)
+      !Number.isFinite(payload.telemetry.gas_raw)
     ) {
 
       return NextResponse.json(
@@ -84,6 +84,18 @@ export async function POST(
         : "mango";
 
     const product = PRODUCTS[cropKey];
+
+    const co2Ppm = calculateCO2PPM(payload.telemetry.gas_raw);
+    if (co2Ppm === null) {
+      return NextResponse.json(
+        { success: false, error: "Invalid MQ135 raw gas reading" },
+        { status: 400 }
+      );
+    }
+
+    // The prediction model currently calls this field co2_sim. Populate it
+    // from the calibrated ADC conversion instead of trusting request input.
+    payload.telemetry.co2_sim = co2Ppm;
 
     if (!product) {
       return NextResponse.json(
@@ -144,7 +156,7 @@ export async function POST(
           crop: cropKey,
           temperature: payload.telemetry.temperature,
           humidity: payload.telemetry.humidity,
-          co2_ppm: payload.telemetry.co2_sim,
+          co2_ppm: co2Ppm,
           raw_gas: payload.telemetry.gas_raw,
         }),
         signal: AbortSignal.timeout(8000),

@@ -3,6 +3,9 @@ import DeviceStatus from "@/models/DeviceStatus";
 import { createDeviceStatus } from "@/controllers/deviceStatusController";
 import connectDB from "@/lib/mongodb";
 
+// Always read the newest MongoDB heartbeat rather than serving a cached GET.
+export const dynamic = "force-dynamic";
+
 export async function POST(request) {
   try {
     const body = await request.json();
@@ -35,7 +38,7 @@ export async function GET() {
     await connectDB();
 
     const latestStatus = await DeviceStatus
-      .findOne({ deviceId: "ESP8266-001" })
+      .findOne({})
       .sort({ createdAt: -1 })
       .lean();
 

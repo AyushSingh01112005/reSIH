@@ -19,6 +19,7 @@ import {
 
 import PredictionSummary from "@/components/PredictionSummary";
 import DashboardAlerts from "@/components/DashboardAlerts";
+import { calculateCO2PPM } from "@/lib/silosense/telemetry";
 
 const CROP_OPTIONS = {
   mango: {
@@ -152,6 +153,8 @@ const Page = () => {
   // =====================================================
 
   useEffect(() => {
+    const HEARTBEAT_POLL_MS = 5_000;
+    const HEARTBEAT_STALE_MS = 12_000;
     let active = true;
 
     const checkDeviceStatus = async () => {
@@ -177,9 +180,15 @@ const Page = () => {
         }
 
         const heartbeatTime = new Date(createdAt).getTime();
+        if (!Number.isFinite(heartbeatTime)) {
+          throw new Error("Invalid device heartbeat timestamp");
+        }
+
         const ageMs = Date.now() - heartbeatTime;
 
-        const online = ageMs <= 7000;
+        // Keep the device online for two missed polls to avoid status flicker
+        // caused by normal Wi-Fi or browser scheduling delays.
+        const online = ageMs >= 0 && ageMs <= HEARTBEAT_STALE_MS;
 
         if (active) {
           setIsDeviceOnline(online);
@@ -204,7 +213,7 @@ const Page = () => {
 
     checkDeviceStatus();
 
-    const interval = setInterval(checkDeviceStatus, 7000);
+    const interval = setInterval(checkDeviceStatus, HEARTBEAT_POLL_MS);
 
     return () => {
       active = false;
@@ -239,9 +248,12 @@ const Page = () => {
           ) || 0,
 
         co2_sim:
-          Number(
-            data.telemetry?.co2_sim ?? data.co2
-          ) || 0,
+          (calculateCO2PPM(
+            data.telemetry?.raw_gas ?? data.telemetry?.gas_raw ?? data.gas
+          ) ??
+            Number(
+              data.telemetry?.co2_ppm_est ?? data.telemetry?.co2_sim ?? data.co2
+            )) || 0,
       },
 
       triggers: {
@@ -848,10 +860,10 @@ const Page = () => {
             ) || 0,
 
           co2:
-            Number(
-              reading.telemetry?.co2_sim ??
-                reading.co2
-            ) || 0,
+            (calculateCO2PPM(
+              reading.telemetry?.raw_gas ?? reading.telemetry?.gas_raw ?? reading.gas
+            ) ??
+              Number(reading.telemetry?.co2_ppm_est ?? reading.telemetry?.co2_sim ?? reading.co2)) || 0,
 
           gas:
             Number(
@@ -930,11 +942,10 @@ const Page = () => {
     const co2Values =
       sensorHistory.map(
         (item) =>
-          Number(
-            item.telemetry
-              ?.co2_sim ??
-              item.co2
-          ) || 0
+          (calculateCO2PPM(
+            item.telemetry?.raw_gas ?? item.telemetry?.gas_raw ?? item.gas
+          ) ??
+            Number(item.telemetry?.co2_ppm_est ?? item.telemetry?.co2_sim ?? item.co2)) || 0
       );
 
     const motionEvents =
