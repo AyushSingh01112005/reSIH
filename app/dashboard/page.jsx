@@ -21,10 +21,26 @@ import PredictionSummary from "@/components/PredictionSummary";
 import DashboardAlerts from "@/components/DashboardAlerts";
 
 const CROP_OPTIONS = {
-  mango: { label: "Mango", temperature: "12–14°C", humidity: "85–90% RH" },
-  apple: { label: "Apple", temperature: "0–4°C", humidity: "90–95% RH" },
-  tomato: { label: "Tomato", temperature: "12–15°C", humidity: "85–95% RH" },
-  potato: { label: "Potato", temperature: "4–10°C", humidity: "90–95% RH" },
+  mango: {
+    label: "Mango",
+    temperature: "12–14°C",
+    humidity: "85–90% RH",
+  },
+  apple: {
+    label: "Apple",
+    temperature: "0–4°C",
+    humidity: "90–95% RH",
+  },
+  tomato: {
+    label: "Tomato",
+    temperature: "12–15°C",
+    humidity: "85–95% RH",
+  },
+  potato: {
+    label: "Potato",
+    temperature: "4–10°C",
+    humidity: "90–95% RH",
+  },
 };
 
 // =====================================================
@@ -33,8 +49,14 @@ const CROP_OPTIONS = {
 
 const playBuzzerSound = () => {
   if (typeof window === "undefined") return;
+
   try {
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const AudioContext =
+      window.AudioContext || window.webkitAudioContext;
+
+    if (!AudioContext) return;
+
+    const audioCtx = new AudioContext();
     const oscillator = audioCtx.createOscillator();
     const gainNode = audioCtx.createGain();
 
@@ -45,6 +67,7 @@ const playBuzzerSound = () => {
     oscillator.frequency.setValueAtTime(180, audioCtx.currentTime);
 
     const now = audioCtx.currentTime;
+
     oscillator.frequency.setValueAtTime(180, now);
     oscillator.frequency.linearRampToValueAtTime(250, now + 0.15);
     oscillator.frequency.linearRampToValueAtTime(180, now + 0.3);
@@ -64,12 +87,21 @@ const playBuzzerSound = () => {
 };
 
 const sendDesktopNotification = (title, body) => {
-  if (typeof window === "undefined" || !("Notification" in window)) return;
+  if (
+    typeof window === "undefined" ||
+    !("Notification" in window)
+  ) {
+    return;
+  }
 
   if (Notification.permission === "granted") {
     new Notification(title, { body });
   }
 };
+
+// =====================================================
+// PAGE
+// =====================================================
 
 const Page = () => {
   const [sensorData, setSensorData] = useState({
@@ -115,31 +147,64 @@ const Page = () => {
   const lastStatusRef = useRef("NORMAL");
   const lastAlertTimeRef = useRef(0);
 
-  // Poll the DeviceStatus heartbeat every 5 seconds. A heartbeat less than
-  // seven seconds old means the NodeMCU is online.
+  // =====================================================
+  // DEVICE STATUS / HEARTBEAT
+  // =====================================================
+
   useEffect(() => {
     let active = true;
 
     const checkDeviceStatus = async () => {
       try {
-        const response = await fetch("/api/active", { cache: "no-store" });
-        if (!response.ok) throw new Error("Failed to fetch device status");
+        const response = await fetch("/api/active", {
+          cache: "no-store",
+        });
+
+        if (!response.ok) {
+          throw new Error("Failed to fetch device status");
+        }
 
         const result = await response.json();
+
         const createdAt = result.data?.createdAt;
-        const ageMs = createdAt ? Date.now() - new Date(createdAt).getTime() : Infinity;
+
+        if (!createdAt) {
+          if (active) {
+            setIsDeviceOnline(false);
+          }
+
+          return;
+        }
+
+        const heartbeatTime = new Date(createdAt).getTime();
+        const ageMs = Date.now() - heartbeatTime;
+
+        const online = ageMs <= 7000;
 
         if (active) {
-          setIsDeviceOnline(ageMs < 7000);
+          setIsDeviceOnline(online);
         }
+
+        console.log(
+          "Heartbeat:",
+          createdAt,
+          "| Age:",
+          `${(ageMs / 1000).toFixed(2)}s`,
+          "| Device:",
+          online ? "ONLINE" : "OFFLINE",
+        );
       } catch (error) {
         console.error("Error checking device status:", error);
-        if (active) setIsDeviceOnline(false);
+
+        if (active) {
+          setIsDeviceOnline(false);
+        }
       }
     };
 
     checkDeviceStatus();
-    const interval = setInterval(checkDeviceStatus, 5000);
+
+    const interval = setInterval(checkDeviceStatus, 7000);
 
     return () => {
       active = false;
@@ -159,33 +224,45 @@ const Page = () => {
 
       telemetry: {
         temperature:
-          Number(data.telemetry?.temperature ?? data.temperature) || 0,
+          Number(
+            data.telemetry?.temperature ?? data.temperature
+          ) || 0,
 
         humidity:
-          Number(data.telemetry?.humidity ?? data.humidity) || 0,
+          Number(
+            data.telemetry?.humidity ?? data.humidity
+          ) || 0,
 
         gas_raw:
-          Number(data.telemetry?.gas_raw ?? data.gas) || 0,
+          Number(
+            data.telemetry?.gas_raw ?? data.gas
+          ) || 0,
 
         co2_sim:
-          Number(data.telemetry?.co2_sim ?? data.co2) || 0,
+          Number(
+            data.telemetry?.co2_sim ?? data.co2
+          ) || 0,
       },
 
       triggers: {
         alcohol_detected: Boolean(
-          data.triggers?.alcohol_detected ?? data.alcohol_detected
+          data.triggers?.alcohol_detected ??
+            data.alcohol_detected
         ),
 
         motion_detected: Boolean(
-          data.triggers?.motion_detected ?? data.motion
+          data.triggers?.motion_detected ??
+            data.motion
         ),
 
         sound_detected: Boolean(
-          data.triggers?.sound_detected ?? data.sound_detected
+          data.triggers?.sound_detected ??
+            data.sound_detected
         ),
 
         tamper_light: Boolean(
-          data.triggers?.tamper_light ?? data.tamper_light
+          data.triggers?.tamper_light ??
+            data.tamper_light
         ),
       },
 
@@ -196,8 +273,9 @@ const Page = () => {
         uptime_sec:
           Number(data.status?.uptime_sec) || 0,
 
-        wifi_connected:
-          Boolean(data.status?.wifi_connected),
+        wifi_connected: Boolean(
+          data.status?.wifi_connected
+        ),
       },
 
       createdAt:
@@ -215,43 +293,61 @@ const Page = () => {
     };
   }, []);
 
-  // Request browser notification permission on mount
+  // =====================================================
+  // NOTIFICATION PERMISSION
+  // =====================================================
+
   useEffect(() => {
-    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
+    if (
+      typeof window !== "undefined" &&
+      "Notification" in window &&
+      Notification.permission === "default"
+    ) {
       Notification.requestPermission();
     }
   }, []);
 
-  // Trigger alert / buzzer logic
+  // =====================================================
+  // RISK ALERT
+  // =====================================================
+
   const handleRiskAlert = useCallback((pred) => {
     if (!pred) return;
 
-    const isHighRisk = pred.riskPercentage >= 40 || pred.status === "WARNING" || pred.status === "CRITICAL";
+    const isHighRisk =
+      pred.riskPercentage >= 40 ||
+      pred.status === "WARNING" ||
+      pred.status === "CRITICAL";
 
     if (isHighRisk) {
       const now = Date.now();
-      const statusWorsened =
-        (pred.status === "CRITICAL" && lastStatusRef.current !== "CRITICAL") ||
-        (pred.status === "WARNING" && lastStatusRef.current === "NORMAL");
 
-      const timeElapsed = now - lastAlertTimeRef.current > 15000;
+      const statusWorsened =
+        (pred.status === "CRITICAL" &&
+          lastStatusRef.current !== "CRITICAL") ||
+        (pred.status === "WARNING" &&
+          lastStatusRef.current === "NORMAL");
+
+      const timeElapsed =
+        now - lastAlertTimeRef.current > 15000;
 
       if (statusWorsened || timeElapsed) {
-        // Play buzzer sound
+        // Uncomment if you want browser buzzer audio.
         // playBuzzerSound();
 
-        // Desktop notification
         sendDesktopNotification(
           `⚠️ SiloSense Alert: ${pred.status} Status`,
-          pred.explanation || `Silo spoilage risk has reached ${pred.riskPercentage}%.`
+          pred.explanation ||
+            `Silo spoilage risk has reached ${pred.riskPercentage}%.`
         );
 
-        // UI Toast Alert
         setActiveAlert({
           title: `Silo Alert: ${pred.status}`,
-          message: pred.explanation || `Spoilage risk has reached ${pred.riskPercentage}%. Please check storage conditions immediately.`,
+          message:
+            pred.explanation ||
+            `Spoilage risk has reached ${pred.riskPercentage}%. Please check storage conditions immediately.`,
           status: pred.status,
-          time: new Date().toLocaleTimeString()
+          time: new Date().toLocaleTimeString(),
         });
 
         lastAlertTimeRef.current = now;
@@ -260,53 +356,107 @@ const Page = () => {
       setActiveAlert(null);
     }
 
-    lastStatusRef.current = pred.status || "NORMAL";
-    lastRiskRef.current = pred.riskPercentage || 0;
+    lastStatusRef.current =
+      pred.status || "NORMAL";
+
+    lastRiskRef.current =
+      pred.riskPercentage || 0;
   }, []);
 
   // =====================================================
-  // REAL-TIME DATA POLLING (Every 2.5 seconds)
+  // REAL-TIME SENSOR DATA POLLING
   // =====================================================
+
   useEffect(() => {
     let active = true;
 
     const fetchLatestData = async () => {
       try {
-        const res = await fetch("/api/getSensor?limit=50");
-        if (!res.ok) throw new Error("Failed to fetch sensor data");
+        const res = await fetch(
+          "/api/getSensor?limit=50",
+          {
+            cache: "no-store",
+          }
+        );
+
+        if (!res.ok) {
+          throw new Error(
+            "Failed to fetch sensor data"
+          );
+        }
+
         const json = await res.json();
 
         if (!active) return;
 
-        if (json.success && Array.isArray(json.data)) {
+        if (
+          json.success &&
+          Array.isArray(json.data)
+        ) {
           setIsConnected(true);
-          const normalized = json.data.map(normalizeReading);
-          setSensorHistory(normalized.slice(0, 50));
+
+          const normalized =
+            json.data.map(normalizeReading);
+
+          setSensorHistory(
+            normalized.slice(0, 50)
+          );
 
           if (normalized.length > 0) {
             const latest = normalized[0];
-            setSensorData(latest);
-            setLastUpdate(new Date(latest.createdAt || new Date().toISOString()));
 
-            // Fetch prediction for the latest reading
-            const predResponse = await fetch("/api/silosense/predict", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ ...latest, product: selectedCrop }),
-            });
+            setSensorData(latest);
+
+            setLastUpdate(
+              new Date(
+                latest.createdAt ||
+                  new Date().toISOString()
+              )
+            );
+
+            // =================================================
+            // PREDICTION
+            // =================================================
+
+            const predResponse = await fetch(
+              "/api/silosense/predict",
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type":
+                    "application/json",
+                },
+                body: JSON.stringify({
+                  ...latest,
+                  product: selectedCrop,
+                }),
+              }
+            );
 
             if (predResponse.ok) {
-              const predJson = await predResponse.json();
-              if (active && predJson.success) {
-                const predData = predJson.prediction || null;
+              const predJson =
+                await predResponse.json();
+
+              if (
+                active &&
+                predJson.success
+              ) {
+                const predData =
+                  predJson.prediction || null;
+
                 setPrediction(predData);
+
                 handleRiskAlert(predData);
               }
             }
           }
         }
       } catch (error) {
-        console.error("Error in polling fetch:", error);
+        console.error(
+          "Error in polling fetch:",
+          error
+        );
+
         if (active) {
           setIsConnected(false);
         }
@@ -314,61 +464,80 @@ const Page = () => {
     };
 
     fetchLatestData();
-    const intervalId = setInterval(fetchLatestData, 10000);
+
+    const intervalId = setInterval(
+      fetchLatestData,
+      10000
+    );
 
     return () => {
       active = false;
       clearInterval(intervalId);
     };
-  }, [normalizeReading, handleRiskAlert, selectedCrop]);
+  }, [
+    normalizeReading,
+    handleRiskAlert,
+    selectedCrop,
+  ]);
 
   // =====================================================
   // CURRENT VALUES
   // =====================================================
 
-  const temperature = Number(
-    sensorData.telemetry?.temperature
-  ) || 0;
+  const temperature =
+    Number(
+      sensorData.telemetry?.temperature
+    ) || 0;
 
-  const humidity = Number(
-    sensorData.telemetry?.humidity
-  ) || 0;
+  const humidity =
+    Number(
+      sensorData.telemetry?.humidity
+    ) || 0;
 
-  const gas = Number(
-    sensorData.telemetry?.gas_raw
-  ) || 0;
+  const gas =
+    Number(
+      sensorData.telemetry?.gas_raw
+    ) || 0;
 
-  const co2 = Number(
-    sensorData.telemetry?.co2_sim
-  ) || 0;
+  const co2 =
+    Number(
+      sensorData.telemetry?.co2_sim
+    ) || 0;
 
-  const motionDetected = Boolean(
-    sensorData.triggers?.motion_detected
-  );
+  const motionDetected =
+    Boolean(
+      sensorData.triggers?.motion_detected
+    );
 
-  const soundDetected = Boolean(
-    sensorData.triggers?.sound_detected
-  );
+  const soundDetected =
+    Boolean(
+      sensorData.triggers?.sound_detected
+    );
 
-  const alcoholDetected = Boolean(
-    sensorData.triggers?.alcohol_detected
-  );
+  const alcoholDetected =
+    Boolean(
+      sensorData.triggers?.alcohol_detected
+    );
 
-  const tamperDetected = Boolean(
-    sensorData.triggers?.tamper_light
-  );
+  const tamperDetected =
+    Boolean(
+      sensorData.triggers?.tamper_light
+    );
 
-  const wifiConnected = Boolean(
-    sensorData.status?.wifi_connected
-  );
+  const wifiConnected =
+    Boolean(
+      sensorData.status?.wifi_connected
+    );
 
-  const httpResponse = Number(
-    sensorData.status?.http_response
-  ) || 0;
+  const httpResponse =
+    Number(
+      sensorData.status?.http_response
+    ) || 0;
 
-  const uptimeSeconds = Number(
-    sensorData.status?.uptime_sec
-  ) || 0;
+  const uptimeSeconds =
+    Number(
+      sensorData.status?.uptime_sec
+    ) || 0;
 
   // =====================================================
   // STATUS FUNCTIONS
@@ -376,10 +545,19 @@ const Page = () => {
 
   const getTemperatureStatus = () => {
     const ranges = {
-      mango: [12, 14], apple: [0, 4], tomato: [12, 15], potato: [4, 10],
+      mango: [12, 14],
+      apple: [0, 4],
+      tomato: [12, 15],
+      potato: [4, 10],
     };
-    const [min, max] = ranges[selectedCrop];
-    if (temperature >= min && temperature <= max) {
+
+    const [min, max] =
+      ranges[selectedCrop];
+
+    if (
+      temperature >= min &&
+      temperature <= max
+    ) {
       return "Normal";
     }
 
@@ -387,8 +565,15 @@ const Page = () => {
   };
 
   const getHumidityStatus = () => {
-    const minimum = selectedCrop === "mango" ? 85 : 90;
-    if (humidity >= minimum && humidity <= 95) {
+    const minimum =
+      selectedCrop === "mango"
+        ? 85
+        : 90;
+
+    if (
+      humidity >= minimum &&
+      humidity <= 95
+    ) {
       return "Normal";
     }
 
@@ -411,8 +596,10 @@ const Page = () => {
     return "Poor";
   };
 
-  // Refresh the source record when the operator asks for analysis so Gemini
-  // always receives the newest available telemetry and model output.
+  // =====================================================
+  // GEMINI ANALYSIS
+  // =====================================================
+
   const handleGeminiAnalysis = async () => {
     if (isAnalyzing) return;
 
@@ -420,71 +607,149 @@ const Page = () => {
     setGeminiError(null);
 
     try {
-      const latestResponse = await fetch("/api/getSensor?limit=1", {
-        cache: "no-store",
-      });
-      const latestJson = await latestResponse.json();
+      const latestResponse = await fetch(
+        "/api/getSensor?limit=1",
+        {
+          cache: "no-store",
+        }
+      );
 
-      if (!latestResponse.ok || !latestJson.success || !latestJson.data?.[0]) {
-        throw new Error("The latest sensor reading is not available yet.");
+      const latestJson =
+        await latestResponse.json();
+
+      if (
+        !latestResponse.ok ||
+        !latestJson.success ||
+        !latestJson.data?.[0]
+      ) {
+        throw new Error(
+          "The latest sensor reading is not available yet."
+        );
       }
 
-      const latestReading = normalizeReading(latestJson.data[0]);
+      const latestReading =
+        normalizeReading(
+          latestJson.data[0]
+        );
+
       setSensorData(latestReading);
-      setLastUpdate(new Date(latestReading.createdAt));
 
-      const predictionResponse = await fetch("/api/silosense/predict", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(latestReading),
-      });
-      const predictionJson = await predictionResponse.json();
+      setLastUpdate(
+        new Date(latestReading.createdAt)
+      );
 
-      if (!predictionResponse.ok || !predictionJson.success) {
-        throw new Error(predictionJson.error || "Could not calculate the SiloSense prediction.");
+      const predictionResponse =
+        await fetch(
+          "/api/silosense/predict",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            body: JSON.stringify(
+              latestReading
+            ),
+          }
+        );
+
+      const predictionJson =
+        await predictionResponse.json();
+
+      if (
+        !predictionResponse.ok ||
+        !predictionJson.success
+      ) {
+        throw new Error(
+          predictionJson.error ||
+            "Could not calculate the SiloSense prediction."
+        );
       }
 
-      const latestPrediction = predictionJson.prediction;
+      const latestPrediction =
+        predictionJson.prediction;
+
       setPrediction(latestPrediction);
-      handleRiskAlert(latestPrediction);
 
-      const response = await fetch("/api/gemini", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          product: selectedCrop,
-          telemetry: latestReading.telemetry,
-          triggers: latestReading.triggers,
-          status: latestReading.status,
-          deviceId: latestReading.deviceId,
-          timestamp_ms: latestReading.timestamp_ms,
-          modelPrediction: latestPrediction,
-        }),
-      });
-      const data = await response.json();
+      handleRiskAlert(
+        latestPrediction
+      );
 
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || "Gemini could not complete the analysis.");
+      const response = await fetch(
+        "/api/gemini",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            product: selectedCrop,
+            telemetry:
+              latestReading.telemetry,
+            triggers:
+              latestReading.triggers,
+            status:
+              latestReading.status,
+            deviceId:
+              latestReading.deviceId,
+            timestamp_ms:
+              latestReading.timestamp_ms,
+            modelPrediction:
+              latestPrediction,
+          }),
+        }
+      );
+
+      const data =
+        await response.json();
+
+      if (
+        !response.ok ||
+        !data.success
+      ) {
+        throw new Error(
+          data.error ||
+            "Gemini could not complete the analysis."
+        );
       }
 
       setGeminiAnalysis({
         ...data.analysis,
-        analyzedAt: new Date().toISOString(),
+        analyzedAt:
+          new Date().toISOString(),
       });
     } catch (error) {
-      console.error("Gemini analysis request failed:", error);
-      setGeminiError(error.message || "Unable to complete the Gemini analysis.");
+      console.error(
+        "Gemini analysis request failed:",
+        error
+      );
+
+      setGeminiError(
+        error.message ||
+          "Unable to complete the Gemini analysis."
+      );
     } finally {
       setIsAnalyzing(false);
     }
   };
 
+  // =====================================================
+  // STATUS CLASS
+  // =====================================================
+
   const getStatusClass = (status) => {
-    if (status === "Normal" || status === "Good") {
+    if (
+      status === "Normal" ||
+      status === "Good"
+    ) {
       return "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
     }
 
-    if (status === "Warning" || status === "High") {
+    if (
+      status === "Warning" ||
+      status === "High"
+    ) {
       return "bg-yellow-500/10 text-yellow-400 border-yellow-500/20";
     }
 
@@ -500,11 +765,14 @@ const Page = () => {
       return "--:--";
     }
 
-    return lastUpdate.toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
+    return lastUpdate.toLocaleTimeString(
+      [],
+      {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      }
+    );
   };
 
   const formatUptime = (seconds) => {
@@ -512,15 +780,18 @@ const Page = () => {
       return "0s";
     }
 
-    const days = Math.floor(seconds / 86400);
+    const days =
+      Math.floor(seconds / 86400);
 
-    const hours = Math.floor(
-      (seconds % 86400) / 3600
-    );
+    const hours =
+      Math.floor(
+        (seconds % 86400) / 3600
+      );
 
-    const minutes = Math.floor(
-      (seconds % 3600) / 60
-    );
+    const minutes =
+      Math.floor(
+        (seconds % 3600) / 60
+      );
 
     const secs = seconds % 60;
 
@@ -554,50 +825,65 @@ const Page = () => {
         return {
           index,
 
-          time: date.toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit",
-          }),
+          time: date.toLocaleTimeString(
+            [],
+            {
+              hour: "2-digit",
+              minute: "2-digit",
+            }
+          ),
 
           temperature:
             Number(
-              reading.telemetry?.temperature ??
-              reading.temperature
+              reading.telemetry
+                ?.temperature ??
+                reading.temperature
             ) || 0,
 
           humidity:
             Number(
-              reading.telemetry?.humidity ??
-              reading.humidity
+              reading.telemetry
+                ?.humidity ??
+                reading.humidity
             ) || 0,
 
           co2:
             Number(
               reading.telemetry?.co2_sim ??
-              reading.co2
+                reading.co2
             ) || 0,
 
           gas:
             Number(
               reading.telemetry?.gas_raw ??
-              reading.gas
+                reading.gas
             ) || 0,
 
-          motion: reading.triggers?.motion_detected
-            ? 1
-            : reading.motion
+          motion:
+            reading.triggers
+              ?.motion_detected
+              ? 1
+              : reading.motion
+                ? 1
+                : 0,
+
+          sound:
+            reading.triggers
+              ?.sound_detected
               ? 1
               : 0,
 
-          sound: reading.triggers?.sound_detected ? 1 : 0,
+          alcohol:
+            reading.triggers
+              ?.alcohol_detected
+              ? 1
+              : 0,
 
-          alcohol: reading.triggers?.alcohol_detected
-            ? 1
-            : 0,
-
-          tamper: reading.triggers?.tamper_light
-            ? 1
-            : 0,
+          tamper:
+            reading.triggers
+              ?.tamper_light
+              ? 1
+              : 0,
         };
       });
   }, [sensorHistory]);
@@ -621,67 +907,89 @@ const Page = () => {
       };
     }
 
-    const temperatures = sensorHistory.map(
-      (item) =>
-        Number(
-          item.telemetry?.temperature ??
-          item.temperature
-        ) || 0
-    );
+    const temperatures =
+      sensorHistory.map(
+        (item) =>
+          Number(
+            item.telemetry
+              ?.temperature ??
+              item.temperature
+          ) || 0
+      );
 
-    const humidities = sensorHistory.map(
-      (item) =>
-        Number(
-          item.telemetry?.humidity ??
-          item.humidity
-        ) || 0
-    );
+    const humidities =
+      sensorHistory.map(
+        (item) =>
+          Number(
+            item.telemetry
+              ?.humidity ??
+              item.humidity
+          ) || 0
+      );
 
-    const co2Values = sensorHistory.map(
-      (item) =>
-        Number(
-          item.telemetry?.co2_sim ??
-          item.co2
-        ) || 0
-    );
+    const co2Values =
+      sensorHistory.map(
+        (item) =>
+          Number(
+            item.telemetry
+              ?.co2_sim ??
+              item.co2
+          ) || 0
+      );
 
-    const motionEvents = sensorHistory.filter(
-      (item) =>
-        item.triggers?.motion_detected ??
-        item.motion === true
-    ).length;
+    const motionEvents =
+      sensorHistory.filter(
+        (item) =>
+          item.triggers
+            ?.motion_detected ??
+          item.motion === true
+      ).length;
 
-    const soundEvents = sensorHistory.filter(
-      (item) =>
-        item.triggers?.sound_detected === true
-    ).length;
+    const soundEvents =
+      sensorHistory.filter(
+        (item) =>
+          item.triggers
+            ?.sound_detected === true
+      ).length;
 
-    const alcoholEvents = sensorHistory.filter(
-      (item) =>
-        item.triggers?.alcohol_detected === true
-    ).length;
+    const alcoholEvents =
+      sensorHistory.filter(
+        (item) =>
+          item.triggers
+            ?.alcohol_detected === true
+      ).length;
 
-    const tamperEvents = sensorHistory.filter(
-      (item) =>
-        item.triggers?.tamper_light === true
-    ).length;
+    const tamperEvents =
+      sensorHistory.filter(
+        (item) =>
+          item.triggers
+            ?.tamper_light === true
+      ).length;
 
     return {
       avgTemperature:
-        temperatures.reduce((a, b) => a + b, 0) /
-        temperatures.length,
+        temperatures.reduce(
+          (a, b) => a + b,
+          0
+        ) / temperatures.length,
 
       avgHumidity:
-        humidities.reduce((a, b) => a + b, 0) /
-        humidities.length,
+        humidities.reduce(
+          (a, b) => a + b,
+          0
+        ) / humidities.length,
 
-      maxTemperature: Math.max(...temperatures),
+      maxTemperature:
+        Math.max(...temperatures),
 
-      minTemperature: Math.min(...temperatures),
+      minTemperature:
+        Math.min(...temperatures),
 
       avgCO2:
-        co2Values.reduce((a, b) => a + b, 0) /
-        co2Values.length,
+        co2Values.reduce(
+          (a, b) => a + b,
+          0
+        ) / co2Values.length,
 
       motionEvents,
       soundEvents,
@@ -740,11 +1048,9 @@ const Page = () => {
       {/* ================================================= */}
 
       <header className="sticky top-0 z-40 border-b border-slate-800 bg-slate-950/90 backdrop-blur-xl">
-
         <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
 
           <div>
-
             <div className="flex items-center gap-2">
 
               <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-500/10 text-lg">
@@ -752,7 +1058,10 @@ const Page = () => {
               </div>
 
               <h1 className="text-xl font-bold tracking-tight">
-                SILO<span className="text-blue-500">SENSE</span>
+                SILO
+                <span className="text-blue-500">
+                  SENSE
+                </span>
               </h1>
 
             </div>
@@ -760,13 +1069,11 @@ const Page = () => {
             <p className="mt-1 text-xs text-slate-500">
               Smart Cold Storage Monitoring System
             </p>
-
           </div>
 
           <div className="flex items-center gap-4">
 
             <div className="hidden text-right sm:block">
-
               <p className="text-xs text-slate-500">
                 Device
               </p>
@@ -774,38 +1081,39 @@ const Page = () => {
               <p className="text-sm font-medium">
                 {sensorData.deviceId}
               </p>
-
             </div>
 
             <div
-              className={`flex items-center gap-2 rounded-full border px-4 py-2 ${isDeviceOnline
-                ? "border-emerald-500/20 bg-emerald-500/10"
-                : "border-red-500/20 bg-red-500/10"
-                }`}
+              className={`flex items-center gap-2 rounded-full border px-4 py-2 ${
+                isDeviceOnline
+                  ? "border-emerald-500/20 bg-emerald-500/10"
+                  : "border-red-500/20 bg-red-500/10"
+              }`}
             >
 
               <span
-                className={`h-2 w-2 rounded-full ${isDeviceOnline
-                  ? "bg-emerald-400 animate-pulse"
-                  : "bg-red-400"
-                  }`}
+                className={`h-2 w-2 rounded-full ${
+                  isDeviceOnline
+                    ? "bg-emerald-400 animate-pulse"
+                    : "bg-red-400"
+                }`}
               />
 
               <span
-                className={`text-xs font-medium ${isDeviceOnline
-                  ? "text-emerald-400"
-                  : "text-red-400"
-                  }`}
+                className={`text-xs font-medium ${
+                  isDeviceOnline
+                    ? "text-emerald-400"
+                    : "text-red-400"
+                }`}
               >
-                {isDeviceOnline ? "Connected" : "Disconnected"}
+                {isDeviceOnline
+                  ? "Connected"
+                  : "Disconnected"}
               </span>
 
             </div>
-
           </div>
-
         </div>
-
       </header>
 
       {/* ================================================= */}
@@ -814,14 +1122,17 @@ const Page = () => {
 
       <main className="mx-auto max-w-7xl px-6 py-8">
 
-        {/* ALERTS SYSTEM */}
+        {/* ALERTS */}
+
         <div className="mb-6">
           <DashboardAlerts
             isDeviceOnline={isDeviceOnline}
             lastUpdate={lastUpdate}
             prediction={prediction}
             activeAlert={activeAlert}
-            onDismissAlert={() => setActiveAlert(null)}
+            onDismissAlert={() =>
+              setActiveAlert(null)
+            }
           />
         </div>
 
@@ -842,9 +1153,9 @@ const Page = () => {
               </h2>
 
               <p className="mt-2 max-w-2xl text-sm text-slate-500">
-                Monitor temperature, humidity, gas,
-                CO₂, motion, sound, alcohol and tamper
-                activity in real time.
+                Monitor temperature, humidity, gas, CO₂,
+                motion, sound, alcohol and tamper activity
+                in real time.
               </p>
 
             </div>
@@ -862,36 +1173,67 @@ const Page = () => {
             </div>
 
           </div>
-
         </div>
 
+        {/* ================================================= */}
+        {/* CROP */}
+        {/* ================================================= */}
+
         <section className="mb-8 rounded-2xl border border-blue-500/20 bg-blue-950/15 p-4">
+
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+
             <div>
-              <p className="text-sm font-semibold text-white">Stored crop</p>
-              <p className="mt-1 text-xs text-slate-400">Risk is calculated for this crop; shelf life is predicted by the ML model.</p>
+              <p className="text-sm font-semibold text-white">
+                Stored crop
+              </p>
+
+              <p className="mt-1 text-xs text-slate-400">
+                Risk is calculated for this crop; shelf life
+                is predicted by the ML model.
+              </p>
             </div>
+
             <label className="flex items-center gap-3 text-sm text-slate-300">
+
               Crop
+
               <select
                 value={selectedCrop}
                 onChange={(event) => {
-                  setSelectedCrop(event.target.value);
+                  setSelectedCrop(
+                    event.target.value
+                  );
+
                   setPrediction(null);
                   setGeminiAnalysis(null);
                   setGeminiError(null);
                 }}
                 className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 font-medium text-white outline-none transition focus:border-blue-400"
               >
-                {Object.entries(CROP_OPTIONS).map(([value, crop]) => (
-                  <option key={value} value={value}>{crop.label}</option>
+
+                {Object.entries(
+                  CROP_OPTIONS
+                ).map(([value, crop]) => (
+                  <option
+                    key={value}
+                    value={value}
+                  >
+                    {crop.label}
+                  </option>
                 ))}
+
               </select>
             </label>
           </div>
+
           <p className="mt-3 text-xs text-blue-200/80">
-            Target: {CROP_OPTIONS[selectedCrop].temperature} · {CROP_OPTIONS[selectedCrop].humidity}
+            Target:{" "}
+            {CROP_OPTIONS[selectedCrop].temperature}
+            {" · "}
+            {CROP_OPTIONS[selectedCrop].humidity}
           </p>
+
         </section>
 
         {/* ================================================= */}
@@ -919,12 +1261,15 @@ const Page = () => {
             <div className="mt-5">
 
               <p
-                className={`text-2xl font-bold ${isDeviceOnline
-                  ? "text-emerald-400"
-                  : "text-red-400"
-                  }`}
+                className={`text-2xl font-bold ${
+                  isDeviceOnline
+                    ? "text-emerald-400"
+                    : "text-red-400"
+                }`}
               >
-                {isDeviceOnline ? "Online" : "Offline"}
+                {isDeviceOnline
+                  ? "Online"
+                  : "Offline"}
               </p>
 
               <p className="mt-1 text-xs text-slate-500">
@@ -932,7 +1277,6 @@ const Page = () => {
               </p>
 
             </div>
-
           </div>
 
           {/* WIFI */}
@@ -954,12 +1298,15 @@ const Page = () => {
             <div className="mt-5">
 
               <p
-                className={`text-2xl font-bold ${wifiConnected && isDeviceOnline
-                  ? "text-emerald-400"
-                  : "text-red-400"
-                  }`}
+                className={`text-2xl font-bold ${
+                  isDeviceOnline
+                    ? "text-emerald-400"
+                    : "text-red-400"
+                }`}
               >
-                {wifiConnected && isDeviceOnline ? "Connected" : "Disconnected"}
+                {isDeviceOnline
+                  ? "Connected"
+                  : "Disconnected"}
               </p>
 
               <p className="mt-1 text-xs text-slate-500">
@@ -967,7 +1314,6 @@ const Page = () => {
               </p>
 
             </div>
-
           </div>
 
           {/* UPTIME */}
@@ -989,7 +1335,9 @@ const Page = () => {
             <div className="mt-5">
 
               <p className="text-2xl font-bold">
-                {formatUptime(uptimeSeconds)}
+                {formatUptime(
+                  uptimeSeconds
+                )}
               </p>
 
               <p className="mt-1 text-xs text-slate-500">
@@ -997,7 +1345,6 @@ const Page = () => {
               </p>
 
             </div>
-
           </div>
 
           {/* ALERTS */}
@@ -1019,47 +1366,73 @@ const Page = () => {
             <div className="mt-5">
 
               <p
-                className={`text-2xl font-bold ${prediction?.status === "CRITICAL"
-                  ? "text-red-400"
-                  : prediction?.status === "WARNING" ||
-                    motionDetected ||
-                    soundDetected ||
-                    alcoholDetected ||
-                    tamperDetected
-                    ? "text-yellow-400"
-                    : "text-emerald-400"
-                  }`}
+                className={`text-2xl font-bold ${
+                  prediction?.status ===
+                  "CRITICAL"
+                    ? "text-red-400"
+                    : prediction?.status ===
+                          "WARNING" ||
+                        motionDetected ||
+                        soundDetected ||
+                        alcoholDetected ||
+                        tamperDetected
+                      ? "text-yellow-400"
+                      : "text-emerald-400"
+                }`}
               >
-                {prediction ? `${prediction.riskPercentage}%` : "--"}
+                {prediction
+                  ? `${prediction.riskPercentage}%`
+                  : "--"}
               </p>
 
               <p className="mt-1 text-xs text-slate-500">
-                {prediction?.alerts?.[0] || "No active alerts"}
+                {prediction?.alerts?.[0] ||
+                  "No active alerts"}
               </p>
 
             </div>
-
           </div>
 
         </div>
 
         {/* ================================================= */}
-        {/* AI RISK & SPOILAGE ASSESSMENT */}
+        {/* AI RISK */}
         {/* ================================================= */}
+
         <section className="mb-8">
-          <PredictionSummary prediction={prediction} />
-          
+
+          <PredictionSummary
+            prediction={prediction}
+          />
+
           <div className="mt-4 flex flex-col justify-between gap-4 rounded-2xl border border-slate-800 bg-gradient-to-r from-blue-950/20 to-indigo-950/20 p-5 backdrop-blur-md md:flex-row md:items-center">
+
             <div>
+
               <div className="flex items-center gap-2">
-                <span className="text-xs font-bold uppercase tracking-wider text-blue-400">Google Gemini LLM</span>
-                <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-400">Free Tier Active</span>
+
+                <span className="text-xs font-bold uppercase tracking-wider text-blue-400">
+                  Google Gemini LLM
+                </span>
+
+                <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-400">
+                  Free Tier Active
+                </span>
+
               </div>
-              <h4 className="mt-1 text-sm font-semibold text-white">Biochemical Cold Storage Analysis</h4>
+
+              <h4 className="mt-1 text-sm font-semibold text-white">
+                Biochemical Cold Storage Analysis
+              </h4>
+
               <p className="mt-1 text-xs text-slate-400">
-                Analyze the newest sensor record with the SiloSense mathematical-model risk and shelf-life prediction.
+                Analyze the newest sensor record with
+                the SiloSense mathematical-model risk
+                and shelf-life prediction.
               </p>
+
             </div>
+
             <button
               onClick={handleGeminiAnalysis}
               disabled={isAnalyzing}
@@ -1069,63 +1442,142 @@ const Page = () => {
                   : "bg-blue-600 text-white hover:bg-blue-500 active:scale-95 shadow-md shadow-blue-500/10"
               }`}
             >
+
               {isAnalyzing ? (
                 <span className="flex items-center gap-2">
+
                   <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-500 border-t-white" />
+
                   Analyzing...
+
                 </span>
               ) : (
                 "Analyze with Gemini"
               )}
+
             </button>
+
           </div>
+
+          {/* GEMINI ERROR */}
 
           {geminiError && (
             <div className="mt-4 rounded-2xl border border-red-500/30 bg-red-950/20 p-4 text-sm text-red-200">
-              <span className="font-semibold">AI analysis unavailable:</span> {geminiError}
+
+              <span className="font-semibold">
+                AI analysis unavailable:
+              </span>{" "}
+
+              {geminiError}
+
             </div>
           )}
+
+          {/* GEMINI RESULT */}
 
           {geminiAnalysis && (
             <div className="mt-4 rounded-2xl border border-blue-500/25 bg-slate-950/70 p-5 shadow-lg shadow-blue-950/20">
+
               <div className="flex flex-col gap-3 border-b border-slate-800 pb-4 sm:flex-row sm:items-start sm:justify-between">
+
                 <div>
-                  <p className="text-xs font-bold uppercase tracking-wider text-blue-400">Gemini operational guidance</p>
-                  <h4 className="mt-1 text-base font-semibold text-white">{geminiAnalysis.conditionSummary || "Latest storage-condition assessment"}</h4>
+
+                  <p className="text-xs font-bold uppercase tracking-wider text-blue-400">
+                    Gemini operational guidance
+                  </p>
+
+                  <h4 className="mt-1 text-base font-semibold text-white">
+                    {geminiAnalysis.conditionSummary ||
+                      "Latest storage-condition assessment"}
+                  </h4>
+
                 </div>
-                <p className="text-xs text-slate-500">Latest reading analyzed {new Date(geminiAnalysis.analyzedAt).toLocaleTimeString()}</p>
+
+                <p className="text-xs text-slate-500">
+                  Latest reading analyzed{" "}
+                  {new Date(
+                    geminiAnalysis.analyzedAt
+                  ).toLocaleTimeString()}
+                </p>
+
               </div>
 
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
+
                 <div className="rounded-xl bg-slate-900/80 p-3">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Model spoilage risk</p>
-                  <p className="mt-1 text-2xl font-bold text-amber-300">{geminiAnalysis.riskPercentage}%</p>
+
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    Model spoilage risk
+                  </p>
+
+                  <p className="mt-1 text-2xl font-bold text-amber-300">
+                    {geminiAnalysis.riskPercentage}%
+                  </p>
+
                 </div>
+
                 <div className="rounded-xl bg-slate-900/80 p-3">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">ML remaining shelf life</p>
-                  <p className="mt-1 text-2xl font-bold text-emerald-300">{Number(geminiAnalysis.remainingShelfLifeDays).toFixed(1)} days</p>
+
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    ML remaining shelf life
+                  </p>
+
+                  <p className="mt-1 text-2xl font-bold text-emerald-300">
+                    {Number(
+                      geminiAnalysis.remainingShelfLifeDays
+                    ).toFixed(1)}{" "}
+                    days
+                  </p>
+
                 </div>
+
               </div>
 
-              <p className="mt-4 text-sm leading-6 text-slate-300">{geminiAnalysis.explanation}</p>
+              <p className="mt-4 text-sm leading-6 text-slate-300">
+                {geminiAnalysis.explanation}
+              </p>
 
-              {Array.isArray(geminiAnalysis.recommendedActions) && geminiAnalysis.recommendedActions.length > 0 && (
-                <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-                  <p className="text-xs font-bold uppercase tracking-wider text-emerald-400">What to do now</p>
-                  <ol className="mt-3 space-y-2 text-sm text-slate-300">
-                    {geminiAnalysis.recommendedActions.map((action, index) => (
-                      <li key={`${action}-${index}`} className="flex gap-3">
-                        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-xs font-bold text-emerald-300">{index + 1}</span>
-                        <span>{action}</span>
-                      </li>
-                    ))}
-                  </ol>
-                </div>
-              )}
+              {Array.isArray(
+                geminiAnalysis.recommendedActions
+              ) &&
+                geminiAnalysis
+                  .recommendedActions
+                  .length > 0 && (
+                  <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+
+                    <p className="text-xs font-bold uppercase tracking-wider text-emerald-400">
+                      What to do now
+                    </p>
+
+                    <ol className="mt-3 space-y-2 text-sm text-slate-300">
+
+                      {geminiAnalysis.recommendedActions.map(
+                        (action, index) => (
+                          <li
+                            key={`${action}-${index}`}
+                            className="flex gap-3"
+                          >
+
+                            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-xs font-bold text-emerald-300">
+                              {index + 1}
+                            </span>
+
+                            <span>
+                              {action}
+                            </span>
+
+                          </li>
+                        )
+                      )}
+
+                    </ol>
+                  </div>
+                )}
+
             </div>
           )}
-        </section>
 
+        </section>
 
         {/* ================================================= */}
         {/* SENSOR CARDS */}
@@ -1148,7 +1600,6 @@ const Page = () => {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
 
             {sensors.map((sensor) => (
-
               <div
                 key={sensor.name}
                 className="group rounded-2xl border border-slate-800 bg-slate-900/70 p-5 transition hover:-translate-y-1 hover:border-slate-700"
@@ -1183,11 +1634,9 @@ const Page = () => {
                 </p>
 
               </div>
-
             ))}
 
           </div>
-
         </section>
 
         {/* ================================================= */}
@@ -1235,13 +1684,14 @@ const Page = () => {
           <div className="h-[320px] w-full">
 
             {chartData.length > 0 ? (
-
               <ResponsiveContainer
                 width="100%"
                 height="100%"
               >
 
-                <AreaChart data={chartData}>
+                <AreaChart
+                  data={chartData}
+                >
 
                   <defs>
 
@@ -1275,20 +1725,27 @@ const Page = () => {
                   <XAxis
                     dataKey="time"
                     stroke="#64748b"
-                    tick={{ fontSize: 11 }}
+                    tick={{
+                      fontSize: 11,
+                    }}
                   />
 
                   <YAxis
                     stroke="#64748b"
-                    tick={{ fontSize: 11 }}
+                    tick={{
+                      fontSize: 11,
+                    }}
                     unit="°C"
                   />
 
                   <Tooltip
                     contentStyle={{
-                      backgroundColor: "#020617",
-                      border: "1px solid #1e293b",
-                      borderRadius: "12px",
+                      backgroundColor:
+                        "#020617",
+                      border:
+                        "1px solid #1e293b",
+                      borderRadius:
+                        "12px",
                       color: "#fff",
                     }}
                   />
@@ -1322,21 +1779,19 @@ const Page = () => {
                     strokeWidth={3}
                     fill="url(#temperatureGradient)"
                     dot={false}
-                    activeDot={{ r: 5 }}
+                    activeDot={{
+                      r: 5,
+                    }}
                   />
 
                 </AreaChart>
 
               </ResponsiveContainer>
-
             ) : (
-
               <EmptyChart message="Waiting for temperature records..." />
-
             )}
 
           </div>
-
         </section>
 
         {/* ================================================= */}
@@ -1372,13 +1827,14 @@ const Page = () => {
             <div className="h-[280px]">
 
               {chartData.length > 0 ? (
-
                 <ResponsiveContainer
                   width="100%"
                   height="100%"
                 >
 
-                  <LineChart data={chartData}>
+                  <LineChart
+                    data={chartData}
+                  >
 
                     <CartesianGrid
                       strokeDasharray="3 3"
@@ -1388,20 +1844,27 @@ const Page = () => {
                     <XAxis
                       dataKey="time"
                       stroke="#64748b"
-                      tick={{ fontSize: 10 }}
+                      tick={{
+                        fontSize: 10,
+                      }}
                     />
 
                     <YAxis
                       stroke="#64748b"
-                      tick={{ fontSize: 10 }}
+                      tick={{
+                        fontSize: 10,
+                      }}
                       unit="%"
                     />
 
                     <Tooltip
                       contentStyle={{
-                        backgroundColor: "#020617",
-                        border: "1px solid #1e293b",
-                        borderRadius: "12px",
+                        backgroundColor:
+                          "#020617",
+                        border:
+                          "1px solid #1e293b",
+                        borderRadius:
+                          "12px",
                       }}
                     />
 
@@ -1422,21 +1885,19 @@ const Page = () => {
                       stroke="#06b6d4"
                       strokeWidth={3}
                       dot={false}
-                      activeDot={{ r: 5 }}
+                      activeDot={{
+                        r: 5,
+                      }}
                     />
 
                   </LineChart>
 
                 </ResponsiveContainer>
-
               ) : (
-
                 <EmptyChart message="Waiting for humidity records..." />
-
               )}
 
             </div>
-
           </div>
 
           {/* CO2 */}
@@ -1466,13 +1927,14 @@ const Page = () => {
             <div className="h-[280px]">
 
               {chartData.length > 0 ? (
-
                 <ResponsiveContainer
                   width="100%"
                   height="100%"
                 >
 
-                  <LineChart data={chartData}>
+                  <LineChart
+                    data={chartData}
+                  >
 
                     <CartesianGrid
                       strokeDasharray="3 3"
@@ -1482,20 +1944,27 @@ const Page = () => {
                     <XAxis
                       dataKey="time"
                       stroke="#64748b"
-                      tick={{ fontSize: 10 }}
+                      tick={{
+                        fontSize: 10,
+                      }}
                     />
 
                     <YAxis
                       stroke="#64748b"
-                      tick={{ fontSize: 10 }}
+                      tick={{
+                        fontSize: 10,
+                      }}
                       unit=" ppm"
                     />
 
                     <Tooltip
                       contentStyle={{
-                        backgroundColor: "#020617",
-                        border: "1px solid #1e293b",
-                        borderRadius: "12px",
+                        backgroundColor:
+                          "#020617",
+                        border:
+                          "1px solid #1e293b",
+                        borderRadius:
+                          "12px",
                       }}
                     />
 
@@ -1511,21 +1980,19 @@ const Page = () => {
                       stroke="#a78bfa"
                       strokeWidth={3}
                       dot={false}
-                      activeDot={{ r: 5 }}
+                      activeDot={{
+                        r: 5,
+                      }}
                     />
 
                   </LineChart>
 
                 </ResponsiveContainer>
-
               ) : (
-
                 <EmptyChart message="Waiting for CO₂ records..." />
-
               )}
 
             </div>
-
           </div>
 
         </div>
@@ -1563,13 +2030,14 @@ const Page = () => {
             <div className="h-[280px]">
 
               {chartData.length > 0 ? (
-
                 <ResponsiveContainer
                   width="100%"
                   height="100%"
                 >
 
-                  <BarChart data={chartData}>
+                  <BarChart
+                    data={chartData}
+                  >
 
                     <CartesianGrid
                       strokeDasharray="3 3"
@@ -1579,40 +2047,48 @@ const Page = () => {
                     <XAxis
                       dataKey="time"
                       stroke="#64748b"
-                      tick={{ fontSize: 10 }}
+                      tick={{
+                        fontSize: 10,
+                      }}
                     />
 
                     <YAxis
                       stroke="#64748b"
-                      tick={{ fontSize: 10 }}
+                      tick={{
+                        fontSize: 10,
+                      }}
                     />
 
                     <Tooltip
                       contentStyle={{
-                        backgroundColor: "#020617",
-                        border: "1px solid #1e293b",
-                        borderRadius: "12px",
+                        backgroundColor:
+                          "#020617",
+                        border:
+                          "1px solid #1e293b",
+                        borderRadius:
+                          "12px",
                       }}
                     />
 
                     <Bar
                       dataKey="gas"
                       fill="#f59e0b"
-                      radius={[4, 4, 0, 0]}
+                      radius={[
+                        4,
+                        4,
+                        0,
+                        0,
+                      ]}
                     />
 
                   </BarChart>
 
                 </ResponsiveContainer>
-
               ) : (
-
                 <EmptyChart message="Waiting for gas records..." />
-
               )}
 
             </div>
-
           </div>
 
           {/* MOTION */}
@@ -1658,13 +2134,14 @@ const Page = () => {
             <div className="h-[280px]">
 
               {chartData.length > 0 ? (
-
                 <ResponsiveContainer
                   width="100%"
                   height="100%"
                 >
 
-                  <BarChart data={chartData}>
+                  <BarChart
+                    data={chartData}
+                  >
 
                     <CartesianGrid
                       strokeDasharray="3 3"
@@ -1674,7 +2151,9 @@ const Page = () => {
                     <XAxis
                       dataKey="time"
                       stroke="#64748b"
-                      tick={{ fontSize: 10 }}
+                      tick={{
+                        fontSize: 10,
+                      }}
                     />
 
                     <YAxis
@@ -1686,46 +2165,52 @@ const Page = () => {
                           : "None"
                       }
                       stroke="#64748b"
-                      tick={{ fontSize: 10 }}
+                      tick={{
+                        fontSize: 10,
+                      }}
                     />
 
                     <Tooltip
                       contentStyle={{
-                        backgroundColor: "#020617",
-                        border: "1px solid #1e293b",
-                        borderRadius: "12px",
+                        backgroundColor:
+                          "#020617",
+                        border:
+                          "1px solid #1e293b",
+                        borderRadius:
+                          "12px",
                       }}
                       formatter={(value) =>
                         Number(value) === 1
                           ? [
-                            "Motion detected",
-                            "Status",
-                          ]
+                              "Motion detected",
+                              "Status",
+                            ]
                           : [
-                            "No motion",
-                            "Status",
-                          ]
+                              "No motion",
+                              "Status",
+                            ]
                       }
                     />
 
                     <Bar
                       dataKey="motion"
                       fill="#ef4444"
-                      radius={[4, 4, 0, 0]}
+                      radius={[
+                        4,
+                        4,
+                        0,
+                        0,
+                      ]}
                     />
 
                   </BarChart>
 
                 </ResponsiveContainer>
-
               ) : (
-
                 <EmptyChart message="Waiting for motion records..." />
-
               )}
 
             </div>
-
           </div>
 
         </div>
@@ -1800,31 +2285,41 @@ const Page = () => {
 
             <AnalyticsCard
               title="Avg Temperature"
-              value={`${analytics.avgTemperature.toFixed(1)}°C`}
+              value={`${analytics.avgTemperature.toFixed(
+                1
+              )}°C`}
               icon="🌡️"
             />
 
             <AnalyticsCard
               title="Min Temperature"
-              value={`${analytics.minTemperature.toFixed(1)}°C`}
+              value={`${analytics.minTemperature.toFixed(
+                1
+              )}°C`}
               icon="❄️"
             />
 
             <AnalyticsCard
               title="Max Temperature"
-              value={`${analytics.maxTemperature.toFixed(1)}°C`}
+              value={`${analytics.maxTemperature.toFixed(
+                1
+              )}°C`}
               icon="🔥"
             />
 
             <AnalyticsCard
               title="Avg Humidity"
-              value={`${analytics.avgHumidity.toFixed(1)}%`}
+              value={`${analytics.avgHumidity.toFixed(
+                1
+              )}%`}
               icon="💧"
             />
 
             <AnalyticsCard
               title="Avg CO₂"
-              value={`${analytics.avgCO2.toFixed(0)} ppm`}
+              value={`${analytics.avgCO2.toFixed(
+                0
+              )} ppm`}
               icon="🌫️"
             />
 
@@ -1835,7 +2330,6 @@ const Page = () => {
             />
 
           </div>
-
         </section>
 
         {/* ================================================= */}
@@ -1890,15 +2384,16 @@ const Page = () => {
 
             <CurrentValue
               label="Uptime"
-              value={formatUptime(uptimeSeconds)}
+              value={formatUptime(
+                uptimeSeconds
+              )}
             />
 
           </div>
-
         </section>
 
         {/* ================================================= */}
-        {/* SENSOR HISTORY TABLE */}
+        {/* SENSOR HISTORY */}
         {/* ================================================= */}
 
         <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
@@ -1982,7 +2477,6 @@ const Page = () => {
               <tbody>
 
                 {sensorHistory.length === 0 ? (
-
                   <tr>
 
                     <td
@@ -1993,155 +2487,174 @@ const Page = () => {
                     </td>
 
                   </tr>
-
                 ) : (
+                  sensorHistory.map(
+                    (reading, index) => {
 
-                  sensorHistory.map((reading, index) => {
+                      const rowTemperature =
+                        Number(
+                          reading.telemetry
+                            ?.temperature
+                        ) || 0;
 
-                    const rowTemperature =
-                      Number(
-                        reading.telemetry?.temperature
-                      ) || 0;
+                      const rowHumidity =
+                        Number(
+                          reading.telemetry
+                            ?.humidity
+                        ) || 0;
 
-                    const rowHumidity =
-                      Number(
-                        reading.telemetry?.humidity
-                      ) || 0;
+                      const rowCO2 =
+                        Number(
+                          reading.telemetry
+                            ?.co2_sim
+                        ) || 0;
 
-                    const rowCO2 =
-                      Number(
-                        reading.telemetry?.co2_sim
-                      ) || 0;
+                      const rowGas =
+                        Number(
+                          reading.telemetry
+                            ?.gas_raw
+                        ) || 0;
 
-                    const rowGas =
-                      Number(
-                        reading.telemetry?.gas_raw
-                      ) || 0;
+                      const rowMotion =
+                        Boolean(
+                          reading.triggers
+                            ?.motion_detected
+                        );
 
-                    const rowMotion =
-                      Boolean(
-                        reading.triggers?.motion_detected
-                      );
+                      const rowSound =
+                        Boolean(
+                          reading.triggers
+                            ?.sound_detected
+                        );
 
-                    const rowSound =
-                      Boolean(
-                        reading.triggers?.sound_detected
-                      );
+                      const rowAlcohol =
+                        Boolean(
+                          reading.triggers
+                            ?.alcohol_detected
+                        );
 
-                    const rowAlcohol =
-                      Boolean(
-                        reading.triggers?.alcohol_detected
-                      );
+                      const rowTamper =
+                        Boolean(
+                          reading.triggers
+                            ?.tamper_light
+                        );
 
-                    const rowTamper =
-                      Boolean(
-                        reading.triggers?.tamper_light
-                      );
+                      return (
+                        <tr
+                          key={
+                            reading._id ||
+                            `${reading.createdAt}-${index}`
+                          }
+                          className="border-b border-slate-800/70 transition hover:bg-slate-950"
+                        >
 
-                    return (
-                      <tr
-                        key={
-                          reading._id ||
-                          `${reading.createdAt}-${index}`
-                        }
-                        className="border-b border-slate-800/70 transition hover:bg-slate-950"
-                      >
+                          <td className="px-4 py-4 font-medium">
+                            {reading.deviceId ||
+                              "ESP8266-001"}
+                          </td>
 
-                        <td className="px-4 py-4 font-medium">
-                          {reading.deviceId ||
-                            "ESP8266-001"}
-                        </td>
-
-                        <td className="px-4 py-4">
-                          <span className="text-blue-400">
-                            {rowTemperature}°C
-                          </span>
-                        </td>
-
-                        <td className="px-4 py-4">
-                          <span className="text-cyan-400">
-                            {rowHumidity}%
-                          </span>
-                        </td>
-
-                        <td className="px-4 py-4">
-                          <span className="text-purple-400">
-                            {rowCO2} ppm
-                          </span>
-                        </td>
-
-                        <td className="px-4 py-4">
-                          {rowGas}
-                        </td>
-
-                        <td className="px-4 py-4">
-                          <TriggerBadge
-                            active={rowMotion}
-                            activeText="Detected"
-                            inactiveText="None"
-                          />
-                        </td>
-
-                        <td className="px-4 py-4">
-                          <TriggerBadge
-                            active={rowSound}
-                            activeText="Detected"
-                            inactiveText="None"
-                          />
-                        </td>
-
-                        <td className="px-4 py-4">
-                          <TriggerBadge
-                            active={rowAlcohol}
-                            activeText="Detected"
-                            inactiveText="None"
-                          />
-                        </td>
-
-                        <td className="px-4 py-4">
-                          <TriggerBadge
-                            active={rowTamper}
-                            activeText="Detected"
-                            inactiveText="Normal"
-                          />
-                        </td>
-
-                        <td className="px-4 py-4">
-
-                          {reading.status?.wifi_connected ? (
-
-                            <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-400">
-                              Connected
+                          <td className="px-4 py-4">
+                            <span className="text-blue-400">
+                              {
+                                rowTemperature
+                              }°C
                             </span>
+                          </td>
 
-                          ) : (
-
-                            <span className="rounded-full bg-red-500/10 px-2.5 py-1 text-xs text-red-400">
-                              Offline
+                          <td className="px-4 py-4">
+                            <span className="text-cyan-400">
+                              {rowHumidity}%
                             </span>
+                          </td>
 
-                          )}
+                          <td className="px-4 py-4">
+                            <span className="text-purple-400">
+                              {rowCO2} ppm
+                            </span>
+                          </td>
 
-                        </td>
+                          <td className="px-4 py-4">
+                            {rowGas}
+                          </td>
 
-                        <td className="px-4 py-4 text-slate-500">
+                          <td className="px-4 py-4">
+                            <TriggerBadge
+                              active={
+                                rowMotion
+                              }
+                              activeText="Detected"
+                              inactiveText="None"
+                            />
+                          </td>
 
-                          {reading.createdAt
-                            ? new Date(
-                              reading.createdAt
-                            ).toLocaleTimeString([], {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                              second: "2-digit",
-                            })
-                            : "--:--"}
+                          <td className="px-4 py-4">
+                            <TriggerBadge
+                              active={
+                                rowSound
+                              }
+                              activeText="Detected"
+                              inactiveText="None"
+                            />
+                          </td>
 
-                        </td>
+                          <td className="px-4 py-4">
+                            <TriggerBadge
+                              active={
+                                rowAlcohol
+                              }
+                              activeText="Detected"
+                              inactiveText="None"
+                            />
+                          </td>
 
-                      </tr>
-                    );
-                  })
+                          <td className="px-4 py-4">
+                            <TriggerBadge
+                              active={
+                                rowTamper
+                              }
+                              activeText="Detected"
+                              inactiveText="Normal"
+                            />
+                          </td>
 
+                          <td className="px-4 py-4">
+
+                            {reading.status
+                              ?.wifi_connected ? (
+                              <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-400">
+                                Connected
+                              </span>
+                            ) : (
+                              <span className="rounded-full bg-red-500/10 px-2.5 py-1 text-xs text-red-400">
+                                Offline
+                              </span>
+                            )}
+
+                          </td>
+
+                          <td className="px-4 py-4 text-slate-500">
+
+                            {reading.createdAt
+                              ? new Date(
+                                  reading.createdAt
+                                ).toLocaleTimeString(
+                                  [],
+                                  {
+                                    hour: "2-digit",
+                                    minute:
+                                      "2-digit",
+                                    second:
+                                      "2-digit",
+                                  }
+                                )
+                              : "--:--"}
+
+                          </td>
+
+                        </tr>
+                      );
+                    }
+                  )
                 )}
 
               </tbody>
@@ -2186,14 +2699,15 @@ const Page = () => {
               <StorageItem
                 title="Shelf Life"
                 value={
-                  prediction?.remainingShelfLifeDays != null
+                  prediction
+                    ?.remainingShelfLifeDays !=
+                  null
                     ? `${prediction.remainingShelfLifeDays} Days`
                     : "--"
                 }
               />
 
             </div>
-
           </div>
 
           {/* SYSTEM */}
@@ -2220,10 +2734,14 @@ const Page = () => {
                 }
               />
 
+              {/* ========================================= */}
+              {/* IMPORTANT WIFI CHANGE */}
+              {/* ========================================= */}
+
               <InfoRow
                 label="WiFi"
                 value={
-                  wifiConnected && isDeviceOnline
+                  isDeviceOnline
                     ? "Connected"
                     : "Disconnected"
                 }
@@ -2236,7 +2754,9 @@ const Page = () => {
 
               <InfoRow
                 label="Uptime"
-                value={formatUptime(uptimeSeconds)}
+                value={formatUptime(
+                  uptimeSeconds
+                )}
               />
 
               <InfoRow
@@ -2259,13 +2779,11 @@ const Page = () => {
               />
 
             </div>
-
           </div>
 
         </div>
 
       </main>
-
     </div>
   );
 };
@@ -2294,7 +2812,11 @@ function EmptyChart({ message }) {
   );
 }
 
-function AnalyticsCard({ title, value, icon }) {
+function AnalyticsCard({
+  title,
+  value,
+  icon,
+}) {
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
 
@@ -2318,7 +2840,10 @@ function AnalyticsCard({ title, value, icon }) {
   );
 }
 
-function CurrentValue({ label, value }) {
+function CurrentValue({
+  label,
+  value,
+}) {
   return (
     <div className="rounded-xl bg-slate-950 p-4">
 
@@ -2334,7 +2859,10 @@ function CurrentValue({ label, value }) {
   );
 }
 
-function StorageItem({ title, value }) {
+function StorageItem({
+  title,
+  value,
+}) {
   return (
     <div className="rounded-xl bg-slate-950 p-4">
 
@@ -2350,7 +2878,10 @@ function StorageItem({ title, value }) {
   );
 }
 
-function InfoRow({ label, value }) {
+function InfoRow({
+  label,
+  value,
+}) {
   return (
     <div className="flex items-center justify-between border-b border-slate-800 pb-3">
 
@@ -2366,7 +2897,11 @@ function InfoRow({ label, value }) {
   );
 }
 
-function TriggerCard({ title, value, icon }) {
+function TriggerCard({
+  title,
+  value,
+  icon,
+}) {
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
 
@@ -2383,12 +2918,15 @@ function TriggerCard({ title, value, icon }) {
       </div>
 
       <p
-        className={`mt-4 text-xl font-bold ${value
-          ? "text-yellow-400"
-          : "text-emerald-400"
-          }`}
+        className={`mt-4 text-xl font-bold ${
+          value
+            ? "text-yellow-400"
+            : "text-emerald-400"
+        }`}
       >
-        {value ? "Detected" : "Normal"}
+        {value
+          ? "Detected"
+          : "Normal"}
       </p>
 
     </div>

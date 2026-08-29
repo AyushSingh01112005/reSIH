@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
+import DeviceStatus from "@/models/DeviceStatus";
 import { createDeviceStatus } from "@/controllers/deviceStatusController";
+import connectDB from "@/lib/mongodb";
 
 export async function POST(request) {
   try {
@@ -24,6 +26,44 @@ export async function POST(request) {
         message: error.message,
       },
       { status: 400 }
+    );
+  }
+}
+
+export async function GET() {
+  try {
+    await connectDB();
+
+    const latestStatus = await DeviceStatus
+      .findOne({ deviceId: "ESP8266-001" })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    if (!latestStatus) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "No device status found",
+          data: null,
+        },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json({
+      success: true,
+      data: latestStatus,
+    });
+  } catch (error) {
+    console.error("Device status fetch error:", error);
+
+    return NextResponse.json(
+      {
+        success: false,
+        message: error.message,
+        data: null,
+      },
+      { status: 500 }
     );
   }
 }
