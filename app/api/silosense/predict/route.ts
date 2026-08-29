@@ -184,6 +184,10 @@ export async function POST(
       remainingShelfLifeHours,
       remainingShelfLifeDays,
       shelfLifeSource: "ml" as const,
+      explanation:
+        `${prediction.result.explanation} ` +
+        `The ML model predicts ${remainingShelfLifeDays.toFixed(1)} days ` +
+        `(${remainingShelfLifeHours.toFixed(0)} hours) of remaining shelf life.`,
     };
 
 

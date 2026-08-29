@@ -61,9 +61,11 @@ export type PredictionResult = {
 
   riskPercentage: number;
 
-  remainingShelfLifeHours: number;
+  // These values are attached by the ML service in the API route. The
+  // mathematical engine deliberately does not calculate shelf life.
+  remainingShelfLifeHours?: number;
 
-  remainingShelfLifeDays: number;
+  remainingShelfLifeDays?: number;
 
   // Shelf life is supplied by the dedicated crop ML model.
   shelfLifeSource?: "ml";
@@ -112,8 +114,6 @@ function clamp01(value: number): number {
     1
   );
 }
-
-
 /**
  * ----------------------------------------------------
  * TEMPERATURE MODEL
@@ -436,33 +436,6 @@ function calculateDamageRisk(
  * This should eventually be replaced with
  * future-condition simulation.
  */
-function calculateRemainingShelfLife(
-  damage: number,
-  deteriorationRate: number,
-  profile: ProductProfile
-): number {
-
-  const remainingDamage =
-    Math.max(
-      0,
-      profile.criticalDamage -
-      damage
-    );
-
-  if (
-    deteriorationRate <= 0
-  ) {
-    return Infinity;
-  }
-
-  return Math.max(
-    0,
-    (remainingDamage * profile.baselineShelfLifeHours) /
-    deteriorationRate
-  );
-}
-
-
 /**
  * ----------------------------------------------------
  * MAIN PREDICTION FUNCTION
@@ -551,20 +524,20 @@ export function predictSiloSense(
   /**
    * 5. TOTAL DETERIORATION RATE
    *
-   * The calibration-derived condition life is the primary model. Convert it
-   * to a relative rate so that 1.0 is the 18-day reference pace. The separate
-   * sensor factors above are retained for explainability and risk reporting.
+   * This is a relative environmental deterioration rate used only to build
+   * the mathematical spoilage-risk score. It is not a shelf-life prediction.
    */
   const physicalAlert =
     triggers.motion_detected ||
     triggers.tamper_light ||
     triggers.sound_detected;
 
-  const conditionShelfLifeHours =
-    estimateConditionShelfLifeHours(telemetry, profile);
-
-  let deteriorationRate =
-    profile.baselineShelfLifeHours / conditionShelfLifeHours;
+  let deteriorationRate = calculateDeteriorationRate(
+    temperatureFactor,
+    humidityFactor,
+    gasFactor,
+    co2Factor
+  );
 
   if (triggers.alcohol_detected) {
     deteriorationRate *= profile.alcoholDamageMultiplier;
@@ -684,26 +657,7 @@ export function predictSiloSense(
 
 
   /**
-   * 10. REMAINING SHELF LIFE
-   */
-  const remainingShelfLifeHours =
-    calculateRemainingShelfLife(
-      cumulativeDamage,
-      deteriorationRate,
-      profile
-    );
-
-
-  const remainingShelfLifeDays =
-    Number.isFinite(
-      remainingShelfLifeHours
-    )
-      ? remainingShelfLifeHours / 24
-      : Infinity;
-
-
-  /**
-   * 11. STATUS
+   * 10. STATUS
    */
   let status:
     PredictionResult["status"];
@@ -724,7 +678,7 @@ export function predictSiloSense(
 
 
   /**
-   * 12. EXPLANATION
+   * 11. EXPLANATION
    *
    * This can later be replaced by an LLM.
    */
@@ -735,7 +689,6 @@ export function predictSiloSense(
       telemetry.gas_raw,
       telemetry.co2_sim,
       riskPercentage,
-      remainingShelfLifeDays,
       status
     );
 
@@ -749,26 +702,6 @@ export function predictSiloSense(
         profile.name,
 
       riskPercentage,
-
-      remainingShelfLifeHours:
-        Number.isFinite(
-          remainingShelfLifeHours
-        )
-          ? Number(
-              remainingShelfLifeHours
-                .toFixed(2)
-            )
-          : Infinity,
-
-      remainingShelfLifeDays:
-        Number.isFinite(
-          remainingShelfLifeDays
-        )
-          ? Number(
-              remainingShelfLifeDays
-                .toFixed(2)
-            )
-          : Infinity,
 
       cumulativeDamage:
         Number(
@@ -863,14 +796,8 @@ function generateExplanation(
   gas: number,
   co2: number,
   risk: number,
-  rslDays: number,
   status: PredictionResult["status"]
 ): string {
-
-  const rsl =
-    Number.isFinite(rslDays)
-      ? `${rslDays.toFixed(1)} days`
-      : "indefinite";
 
 
   if (
@@ -882,8 +809,7 @@ function generateExplanation(
       `Current temperature is ${temperature}°C, ` +
       `humidity is ${humidity}%, ` +
       `gas index is ${gas}, and CO2 index is ${co2}. ` +
-      `Overall spoilage risk is ${risk}%. ` +
-      `Estimated remaining shelf life is ${rsl}.`
+      `Overall spoilage risk is ${risk}%.`
     );
   }
 
@@ -894,56 +820,13 @@ function generateExplanation(
 
     return (
       `Storage conditions require attention. ` +
-      `Current spoilage risk is ${risk}% ` +
-      `with an estimated remaining shelf life ` +
-      `of ${rsl}.`
+      `Current spoilage risk is ${risk}%.`
     );
   }
 
 
   return (
     `Storage conditions are currently acceptable. ` +
-    `Estimated remaining shelf life is ${rsl}.`
+    `Current spoilage risk is ${risk}%.`
   );
-}
-
-
-/**
- * Estimate shelf life at the current storage condition from the supplied
- * mango observations. We interpolate in log-life space because shelf life is
- * positive and deterioration is multiplicative:
- *
- * log(L) = sum(w_i * log(L_i)) / sum(w_i), where w_i = 1 / (d_i^2 + eps).
- *
- * This preserves each calibration point exactly and avoids an overfit
- * high-order polynomial with a small, non-factorial data set.
- */
-export function estimateConditionShelfLifeHours(
-  telemetry: SiloSensePayload["telemetry"],
-  profile: ProductProfile
-): number {
-  const { calibrationScale: scale, shelfLifeCalibration } = profile;
-  const exactMatchThreshold = 1e-12;
-  let weightedLogLife = 0;
-  let totalWeight = 0;
-
-  for (const point of shelfLifeCalibration) {
-    const distanceSquared =
-      ((telemetry.temperature - point.temperature) / scale.temperature) ** 2 +
-      ((telemetry.humidity - point.humidity) / scale.humidity) ** 2 +
-      ((telemetry.co2_sim - point.co2Ppm) / scale.co2Ppm) ** 2 +
-      ((telemetry.gas_raw - point.gasRaw) / scale.gasRaw) ** 2;
-
-    if (distanceSquared < exactMatchThreshold) {
-      return point.shelfLifeHours;
-    }
-
-    const weight = 1 / distanceSquared;
-    weightedLogLife += weight * Math.log(point.shelfLifeHours);
-    totalWeight += weight;
-  }
-
-  return totalWeight > 0
-    ? Math.exp(weightedLogLife / totalWeight)
-    : profile.baselineShelfLifeHours;
 }
